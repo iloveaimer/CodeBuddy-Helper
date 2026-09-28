@@ -16,13 +16,20 @@ function Get-CodeClis {
     $list = New-Object System.Collections.ArrayList
     $onPath = Get-Command code -ErrorAction SilentlyContinue
     if ($onPath) { [void]$list.Add($onPath.Source) }
-    $cands = @(
-        (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'),
-        (Join-Path $env:ProgramFiles 'Microsoft VS Code\bin\code.cmd'),
-        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft VS Code\bin\code.cmd'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code Insiders\bin\code-insiders.cmd'),
-        (Join-Path $env:ProgramFiles 'Microsoft VS Code Insiders\bin\code-insiders.cmd')
-    )
+    # 必须先判空再 Join-Path：${env:ProgramFiles(x86)} 在 32 位系统上是空字符串，
+    # 而 Join-Path 的 -Path 不接受空值会抛终止性错误 —— 第 3 行设了
+    # $ErrorActionPreference = 'Stop'，脚本会直接死在这一行，连提示都没有。
+    # 四个变体都要列：正式版 / Insiders × ProgramFiles / ProgramFiles(x86)。
+    $cands = @()
+    foreach ($pf in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not $pf) { continue }
+        $cands += (Join-Path $pf 'Microsoft VS Code\bin\code.cmd')
+        $cands += (Join-Path $pf 'Microsoft VS Code Insiders\bin\code-insiders.cmd')
+    }
+    if ($env:LOCALAPPDATA) {
+        $cands += (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd')
+        $cands += (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code Insiders\bin\code-insiders.cmd')
+    }
     foreach ($p in $cands) {
         if ($p -and (Test-Path $p) -and -not $list.Contains($p)) { [void]$list.Add($p) }
     }

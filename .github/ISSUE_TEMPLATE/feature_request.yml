@@ -1,8 +1,20 @@
-name: 功能建议
-description: 希望它还能做点什么
+name: 功能建议 / Feature request
+description: 希望它还能做点什么 / Something you wish it could do
 title: "[Feature] "
 labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        先说问题，再说方案。这样更容易判断该不该做、怎么做。
+
+        ---
+
+        Describe the problem first, then the idea — that makes it much easier to judge whether
+        and how it should be done.
+
+        The field labels below are in Chinese — **answering in English is perfectly fine.**
+
   - type: textarea
     id: problem
     attributes:

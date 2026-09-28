@@ -1,10 +1,8 @@
 # 仓库里一律按 LF 存储，检出时再按下面的规则转换
 * text=auto eol=lf
 
-# PowerShell 脚本必须保留开头的 UTF-8 BOM：没有 BOM 时 PowerShell 5.1 会按系统
-# ANSI 码页解码文件，UTF-8 中文变成乱码，严重时 CJK 标点会吞掉紧跟其后的 ASCII
-# 引号，让字符串永不闭合、整个文件语法报错。
-# .bat 反过来，绝不能有 BOM（cmd 会把 BOM 当成命令的一部分执行），所以不标 utf-8-bom。
+# 这几个脚本一律按 CRLF 检出：PowerShell 5.1 和 cmd 对 LF 结尾的脚本容错都很差。
+# 编码不归这里管 —— git 不碰 BOM，.ps1 的 utf-8-bom 与 .bat 的纯 ASCII 由 .editorconfig 声明。
 *.ps1 text eol=crlf
 *.bat text eol=crlf
 *.cmd text eol=crlf

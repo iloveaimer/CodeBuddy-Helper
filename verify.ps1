@@ -29,7 +29,7 @@ Write-Host '  CodeBuddy Helper 发布前自检' -ForegroundColor Cyan
 Write-Host '  ============================' -ForegroundColor Cyan
 
 # ---------------------------------------------------------------
-Head '[1/6] 编码：.ps1 的 BOM 与 .bat 的纯 ASCII'
+Head '[1/7] 编码：.ps1 的 BOM 与 .bat 的纯 ASCII'
 # PowerShell 5.1 读没有 BOM 的 .ps1 时按系统 ANSI 码页解码。中文变乱码，
 # 更糟的是 CJK 标点被拆开的字节会吞掉紧跟其后的 ASCII 引号，字符串永不闭合，
 # 整个脚本语法报错。.bat 反过来：cmd 按 OEM 码页读，BOM 会被当成命令的一部分。
@@ -46,7 +46,7 @@ Get-ChildItem $src -Filter *.bat -File | Sort-Object Name | ForEach-Object {
 }
 
 # ---------------------------------------------------------------
-Head '[2/6] PowerShell 语法'
+Head '[2/7] PowerShell 语法'
 Get-ChildItem $src -Filter *.ps1 -File | Sort-Object Name | ForEach-Object {
     $err = $null
     [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$err)
@@ -55,7 +55,7 @@ Get-ChildItem $src -Filter *.ps1 -File | Sort-Object Name | ForEach-Object {
 }
 
 # ---------------------------------------------------------------
-Head '[3/6] package.json'
+Head '[3/7] package.json'
 $pkgPath = Join-Path $src 'package.json'
 $pkg = $null
 try {
@@ -65,7 +65,7 @@ try {
 } catch { Bad ('解析失败: ' + $_.Exception.Message) }
 
 # ---------------------------------------------------------------
-Head '[4/6] 打包并核对 VSIX 内容'
+Head '[4/7] 打包并核对 VSIX 内容'
 # hook 脚本漏进包是真实发生过的：扩展只负责轮询和注册，通知全靠 cb-hook.ps1，
 # 它不在包里的话，换台机器通知会完全失效。
 $vsix = Join-Path $src 'dist\CodeBuddy-Helper.vsix'
@@ -84,7 +84,8 @@ if (Test-Path -LiteralPath $vsix) {
 
         # 必须用 -LiteralPath：[] 在 PowerShell 路径里是通配符，[Content_Types].xml 会匹配不到
         foreach ($need in @('extension\extension.js', 'extension\package.json', 'extension\cb-hook.ps1',
-                            'extension\cb-sound.ps1', 'extension.vsixmanifest', '[Content_Types].xml')) {
+                            'extension\cb-sound.ps1', 'extension\README.md', 'extension\LICENSE',
+                            'extension.vsixmanifest', '[Content_Types].xml')) {
             if (Test-Path -LiteralPath (Join-Path $tmp $need)) { Good ('包内含 ' + $need) }
             else { Bad ('包里缺 ' + $need) }
         }
@@ -115,7 +116,7 @@ if (Test-Path -LiteralPath $vsix) {
 }
 
 # ---------------------------------------------------------------
-Head '[5/6] 源码里不该出现的个人痕迹'
+Head '[5/7] 源码里不该出现的个人痕迹'
 # 本机用户名、个人目录会随着 C:\Users\<名字> 这类路径泄进公开仓库
 $scanExt = @('.md', '.js', '.json', '.ps1', '.bat', '.yml', '.yaml', '.txt')
 $skipDir = @('.git', '.codebuddy', 'dist', 'node_modules')
@@ -136,8 +137,14 @@ Get-ChildItem $src -Recurse -File | Where-Object {
 if ($hits.Count -eq 0) { Good '没有发现本机用户目录或个人路径' }
 else { $hits | ForEach-Object { Bad ('含个人路径: ' + $_) } }
 
+# hook 的原始 payload 转储是让人贴进 issue 的：prompt 原文（可能含源码、路径、密钥）
+# 不能入盘，否则等于要求用户把整段对话内容公开出去
+$rawHook = [System.IO.File]::ReadAllText((Join-Path $src 'cb-hook.ps1'), [System.Text.Encoding]::UTF8)
+if ($rawHook -match 'prompt.{0,12}已省略') { Good 'cb-hook.ps1 转储 payload 时会隐去 prompt 原文' }
+else { Bad 'cb-hook.ps1 把 prompt 原文写进了 %TEMP%\cbh-hook-raw.log，而该文件会被贴进 issue' }
+
 # ---------------------------------------------------------------
-Head '[6/6] 私有工作记忆有没有被 git 跟踪'
+Head '[6/7] 私有工作记忆有没有被 git 跟踪'
 # .codebuddy/ 里是本机各项目的工作记忆，含用户名、个人路径、其它私有项目名。
 # 它被 .gitignore 忽略还不够——如果历史上已经被 add 过，ignore 是拦不住的。
 if (Get-Command git -ErrorAction SilentlyContinue) {
@@ -153,6 +160,121 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     else { Good '构建产物未被跟踪' }
 } else {
     Write-Host '  [跳过] 环境里没有 git' -ForegroundColor Yellow
+}
+
+# ---------------------------------------------------------------
+Head '[7/7] 通知链路：不重复、不指错、能弹能点'
+# 点击跳转靠 Toast 的 launch 属性。缺了它，通知照样弹得出来，但被点击时没有任何反应、
+# 也不报任何错，只能靠检查提前拦住。两条通知路径各拼各的 XML，都要查。
+$hookText = [System.IO.File]::ReadAllText((Join-Path $src 'cb-hook.ps1'), [System.Text.Encoding]::UTF8)
+$jsText = [System.IO.File]::ReadAllText((Join-Path $src 'extension.js'), [System.Text.Encoding]::UTF8)
+
+# hook 侧：把函数原样抠出来执行，用带中文和空格的路径验编码与结尾斜杠。
+# 用 AST 定位函数体，不用正则：正则一遇到重排格式（比如在闭括号那行末尾加个注释）
+# 就匹配不到，会报"找不到 Get-LaunchUrl"这种假失败。
+$fnAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $src 'cb-hook.ps1'), [ref]$null, [ref]$null).FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-LaunchUrl' }, $true) | Select-Object -First 1
+if ($fnAst) {
+    try {
+        Invoke-Expression $fnAst.Extent.Text
+        $u = Get-LaunchUrl 'd:/测试 目录/项目'
+        $why = @()
+        if ($u -notmatch '^vscode://file/d:/') { $why += '前缀不对' }
+        if (-not $u.EndsWith('/')) { $why += '结尾缺 /，VS Code 会按文件打开' }
+        if ($u -match '[^\x00-\x7F]') { $why += '还有没编码的非 ASCII 字符' }
+        if ($u -match ' ') { $why += '还有没编码的空格' }
+        if ($why.Count -gt 0) { Bad ('cb-hook.ps1 的项目地址有问题: ' + ($why -join '; ') + '  ->  ' + $u) }
+        else { Good 'cb-hook.ps1 的项目地址格式正确' }
+    } catch { Bad ('cb-hook.ps1 项目地址执行失败: ' + $_.Exception.Message) }
+} else { Bad 'cb-hook.ps1 里找不到 Get-LaunchUrl' }
+
+# 扩展侧是另一条独立的 Toast 拼装路径，最容易漏掉 launch —— 漏了就点了没反应
+if ($jsText -match 'activationType="protocol"') { Good 'extension.js 的通知带跳转属性' }
+else { Bad 'extension.js 的通知没有 launch，被点击时不会有任何反应' }
+if ($jsText -match 'function projectUrl') { Good 'extension.js 有项目地址解析' }
+else { Bad 'extension.js 缺 projectUrl，通知指不到对应项目' }
+
+# 「测试通知」走的是真实 hook 链路，会被"前台静默"吃掉——可点这个命令的人当然正看着 VS Code。
+# 结果是照 README 验证安装的人什么也看不到，以为装失败了。所以测试会话必须被认得。
+if ($hookText -match "'cbh-test'" -and $hookText -match '\$isTest') {
+    Good 'cb-hook.ps1 认得测试会话（测试通知不会被前台静默吃掉）'
+} else {
+    Bad 'cb-hook.ps1 不认得测试会话，测试通知会被前台静默吃掉'
+}
+
+# 前台静默若按「任意一个窗口前台」判定，多窗口并行时（本机实测 6 个窗口、7 个焦点文件）
+# 用户在 B 窗口干活、A 窗口的项目跑完就会被静默掉，完成通知再也收不到。必须按任务所在项目判定。
+if ($hookText -match 'function Test-ProjectFocused' -and $hookText -match 'Test-ProjectFocused \$cwd') {
+    Good 'cb-hook.ps1 按任务所在项目判定前台静默（多窗口不会误静默）'
+} else {
+    Bad 'cb-hook.ps1 的前台判定退回按任意窗口了，多窗口下完成通知会被误静默'
+}
+if ($jsText -match 'wsPaths') {
+    Good 'extension.js 上报焦点时带上了本窗口的工作区路径'
+} else {
+    Bad 'extension.js 没上报工作区路径，hook 无法判断任务是否就在前台那个窗口'
+}
+
+# 日志目录是当天所有项目共用的（实测同时有 5 个项目的日志）。不按本窗口项目筛的话：
+# ① A 窗口会把 B 项目的错误重试进 A 的会话；② 每个窗口各弹一次同样的通知。
+if ($jsText -match 'function localProjects' -and $jsText -match 'mine\.includes') {
+    Good 'extension.js 只处理本窗口打开的项目'
+} else {
+    Bad 'extension.js 会处理其它项目的日志：重试会发错会话，通知会重复'
+}
+
+# 内容审核拦截（InternalError.Algo.DataInspectionFailed）整行没有 HTTP 字样，
+# 只认 HTTP (429|5xx) 的话这类错误永远不会被重试——而 CodeBuddy 自己只内部重试 1 次，
+# 失败就弹「处理过程出现异常」干等用户点。errLabel 保证它显示成「内容审核拦截」
+# 而不是把内部代号 inspect 当 HTTP 码露给用户。
+if ($jsText -match 'DataInspectionFailed') {
+    if ($jsText -match 'errLabel') {
+        Good 'extension.js 认得内容审核拦截并自动续跑（不露内部错误代号）'
+    } else {
+        Bad 'extension.js 认得内容审核拦截但没做文案转换，通知里会显示内部代号'
+    }
+} else {
+    Bad 'extension.js 不认得内容审核拦截，这类错误只会弹「处理过程出现异常」而不自动重试'
+}
+
+# 「服务出现异常，请重试」（错误码 500）在日志里是「后端服务响应状态码异常」，整行同样没有 HTTP
+# 字样，码在相邻行的 statusCode: 500 / errorCode=500 / "code":500 里。只认 HTTP 的话这一类
+# 全部漏掉（实测 2026-09-20 08:55、08:56 同一个项目连撞两次 500，扩展和没装一样）。
+# srv 是"一条码都取不到"时的兜底代号，由 errLabel 显示成「服务端异常」，不外露内部代号。
+if ($jsText -match '后端服务响应状态码异常' -and $jsText -match 'statusCode' -and $jsText -match 'srv') {
+    Good 'extension.js 认得「后端服务响应状态码异常」并自动续跑'
+} else {
+    Bad 'extension.js 不认得「后端服务响应状态码异常」：500 类弹框不会自动重试'
+}
+
+# 日志文件名是 <项目名>__<32位hex>.log。按 ($projName + '*') 匹配会让 App 命中 AppServer，
+# 把别的项目的 needConfirm 当成这个项目卡在等确认
+if ($hookText.Contains("__*")) { Good 'cb-hook.ps1 按 __ 边界匹配本项目日志' }
+else { Bad 'cb-hook.ps1 的项目日志匹配没有 __ 边界，项目名互为前缀时会认错项目' }
+
+# 撞上服务端错误（429 / 5xx / 内容审核拦截）时，CodeBuddy 只内部重试 1 次就收尾，
+# 日志里留下 onStepError，界面上是「处理过程出现异常，请重试」。这时 Stop 照样触发，
+# 再弹一条「任务执行完成」就和那个弹框互相矛盾，用户会把失败当成跑完
+# （实测 08:57:58 报错、08:58:33 弹"完成 · 4m46s"）。
+# 跑完写 notifyAllStepsEnd、出错写 onStepError；run end 两种都写，拿它当信号必然误判。
+if ($hookText -match 'function Test-FailedEnd' -and $hookText -match 'onStepError' -and $hookText -match 'notifyAllStepsEnd') {
+    Good 'cb-hook.ps1 区分「跑完」与「出错中断」，中断时不会误弹完成'
+} else {
+    Bad 'cb-hook.ps1 不区分完成与中断：服务端报错后仍会弹「任务执行完成」'
+}
+if ($hookText -match '任务中断，未正常完成') {
+    Good 'cb-hook.ps1 中断时的通知文案与完成分开'
+} else {
+    Bad 'cb-hook.ps1 中断时没换文案，用户分不清是跑完还是失败'
+}
+
+# 「等待确认」的三条提醒路径各自只响一次：hook 的 Notification 弹确认框时一次、hook 的 Stop
+# 任务暂停时一次（Stop 不是心跳，同一项目停下后不会再触发第二次）、扩展兜底一次。
+# 而 CodeBuddy 自身没有确认超时（日志里查不到任何 permission 超时或自动拒绝机制），
+# 任务会无限期停在 waiting_user_input、agent 原地闲着。所以必须有一条补提醒兜底。
+if ($jsText -match 'CONFIRM_REMIND' -and $jsText -match '仍在等你确认') {
+    Good 'extension.js 漏看「待确认」后会补一次提醒'
+} else {
+    Bad 'extension.js 的待确认提醒只有一次，用户漏看后任务会一直挂着'
 }
 
 # ---------------------------------------------------------------

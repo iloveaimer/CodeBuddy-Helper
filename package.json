@@ -2,7 +2,7 @@
   "name": "codebuddy-helper",
   "displayName": "CodeBuddy Helper",
   "description": "CodeBuddy 任务完成通知 + 自动重试",
-  "version": "1.2.0",
+  "version": "1.2.4",
   "publisher": "local",
   "license": "MIT",
   "engines": { "vscode": "^1.80.0" },
@@ -12,6 +12,7 @@
   "homepage": "https://github.com/iloveaimer/CodeBuddy-Helper#readme",
   "bugs": { "url": "https://github.com/iloveaimer/CodeBuddy-Helper/issues" },
   "activationEvents": ["*"],
+  "extensionKind": ["ui"],
   "main": "./extension.js",
   "contributes": {
     "commands": [
@@ -43,7 +44,7 @@
           "default": 5,
           "minimum": 1,
           "maximum": 60,
-          "description": "检测到 429 后延迟多少秒自动重试"
+          "description": "检测到失败后延迟多少秒自动重试（429 走指数退避，封顶 60 秒）"
         },
         "codebuddyHelper.notifyOnComplete": {
           "type": "boolean",
@@ -53,7 +54,7 @@
         "codebuddyHelper.notifyOn429": {
           "type": "boolean",
           "default": true,
-          "description": "429 限流时弹 Windows 通知并自动重试"
+          "description": "限流 / 服务端错误 / 内容审核拦截时弹 Windows 通知并自动重试"
         }
       }
     }

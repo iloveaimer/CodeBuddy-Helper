@@ -17,7 +17,7 @@ Say-Cyan '  ====================='
 
 # ---------- 1. 清 hook ----------
 Write-Host ''
-Say-Cyan '[1/3] 清理 settings.json 里的 hook'
+Say-Cyan '[1/4] 清理 settings.json 里的 hook'
 $removed = 0
 if (Test-Path $settings) {
     $sc = $null
@@ -54,17 +54,25 @@ else { Say-Ok ('已移除 ' + $removed + ' 条 hook，原文件备份为 setting
 
 # ---------- 2. 卸扩展 ----------
 Write-Host ''
-Say-Cyan '[2/3] 卸载扩展'
+Say-Cyan '[2/4] 卸载扩展'
 # 与 install.ps1 里的查找逻辑故意重复：两个脚本都要能单独执行，不互相依赖
 $cli = $null
 $onPath = Get-Command code -ErrorAction SilentlyContinue
 if ($onPath) { $cli = $onPath.Source }
 else {
-    foreach ($p in @(
-        (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'),
-        (Join-Path $env:ProgramFiles 'Microsoft VS Code\bin\code.cmd'),
-        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft VS Code\bin\code.cmd')
-    )) { if ($p -and (Test-Path $p)) { $cli = $p; break } }
+    # 与 install.ps1 同样的判空：${env:ProgramFiles(x86)} 可能为空，Join-Path 会抛。
+    # 变体也列全，否则装在 Insiders 里的人卸不掉。
+    $cands = @()
+    foreach ($pf in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not $pf) { continue }
+        $cands += (Join-Path $pf 'Microsoft VS Code\bin\code.cmd')
+        $cands += (Join-Path $pf 'Microsoft VS Code Insiders\bin\code-insiders.cmd')
+    }
+    if ($env:LOCALAPPDATA) {
+        $cands += (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd')
+        $cands += (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code Insiders\bin\code-insiders.cmd')
+    }
+    foreach ($p in $cands) { if (Test-Path $p) { $cli = $p; break } }
 }
 
 if ($cli) {
@@ -75,9 +83,28 @@ if ($cli) {
     Say-Warn '没找到 VS Code 的命令行工具，改为直接删扩展目录'
 }
 
-# ---------- 3. 清残留目录 ----------
+# ---------- 3. 清通知来源注册 ----------
+# 这两项都是本插件自己建的（扩展激活时注册，不注册的话 Toast 会显示成"未知程序"）。
+# 不清的话，开始菜单里会留一个指向 powershell.exe 的 CBH 快捷方式 —— 点了会开一个
+# PowerShell 窗口，没人知道那是什么。
 Write-Host ''
-Say-Cyan '[3/3] 清理残留目录'
+Say-Cyan '[3/4] 清理通知来源注册'
+$regGone = 0
+$lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\CBH.lnk'
+if (Test-Path $lnk) {
+    Remove-Item $lnk -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $lnk)) { Say-Ok '已删除开始菜单里的 CBH 快捷方式'; $regGone++ }
+}
+$regKey = 'HKCU:\Software\Classes\AppUserModelId\CBH'
+if (Test-Path $regKey) {
+    Remove-Item $regKey -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $regKey)) { Say-Ok '已删除通知来源注册表项'; $regGone++ }
+}
+if ($regGone -eq 0) { Say-Ok '没有需要清理的通知来源注册' }
+
+# ---------- 4. 清残留目录 ----------
+Write-Host ''
+Say-Cyan '[4/4] 清理残留目录'
 $n = 0
 foreach ($r in @(
     (Join-Path $env:USERPROFILE '.vscode\extensions'),

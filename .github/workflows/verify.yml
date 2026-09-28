@@ -14,6 +14,9 @@ jobs:
         shell: pwsh
         run: node --check extension.js
 
-      - name: 运行发布前自检
+      # 用 Windows PowerShell 5.1 跑，不用 pwsh：整个项目的编码纪律
+      # （.ps1 要带 BOM、Set-Content -Encoding UTF8 会带 BOM 等）都是针对 PS 5.1 的，
+      # 换成 PS 7 会验出一套和实际运行环境不一样的行为
+      - name: 运行发布前自检（Windows PowerShell 5.1）
         shell: pwsh
-        run: ./verify.ps1
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File ./verify.ps1

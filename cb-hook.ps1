@@ -13,17 +13,13 @@ try {
 $temp = $env:TEMP
 $logFile = Join-Path $temp 'cbh-hook.log'
 $rawFile = Join-Path $temp 'cbh-hook-raw.log'
-$stateFile = Join-Path $temp 'cbh-hook-state.txt'
 $pendFile = Join-Path $temp 'cbh-hook-pending.txt'
 $soundsDir = Join-Path $env:USERPROFILE '.codebuddy-helper\sounds'
 $soundPlayer = Join-Path $PSScriptRoot 'cb-sound.ps1'
 
-# ---------- 原始 payload 转储（排查用，保留最后 200 行） ----------
-try {
-    Add-Content -Path $rawFile -Value ((Get-Date -Format 'HH:mm:ss') + ' ' + $json) -Encoding UTF8
-    $raw = @(Get-Content $rawFile -Encoding UTF8)
-    if ($raw.Count -gt 200) { $raw[-200..-1] | Set-Content -Path $rawFile -Encoding UTF8 }
-} catch {}
+# 项目名要当文件名用，统一在这里清洗。扩展侧必须有同一套规则，
+# 否则扩展按 cbh-path-<项目名>.txt 取项目路径会找不到文件。
+function Get-SafeName($n) { return ($n -replace '[\\/:*?"<>|]', '_') }
 
 # ---------- 解析 payload ----------
 $event = ''
@@ -32,23 +28,24 @@ $safeProj = 'CodeBuddy'
 $cwd = ''
 $ntype = ''
 $genId = ''
-$prompt = ''
 $stopActive = $false
+$isTest = $false
 
 try {
     if ($json) {
         $o = $json | ConvertFrom-Json
         if ($o.hook_event_name) { $event = [string]$o.hook_event_name }
+        # 扩展的"测试通知"命令用这个 session_id 进来
+        if ($o.session_id -eq 'cbh-test') { $isTest = $true }
         if ($o.notification_type) { $ntype = [string]$o.notification_type }
         if ($o.generation_id) { $genId = [string]$o.generation_id }
         if ($o.stop_hook_active) { $stopActive = [bool]$o.stop_hook_active }
-        if ($o.prompt) { $prompt = [string]$o.prompt }
         if ($o.cwd) {
             $cwd = [string]$o.cwd
             $leaf = Split-Path $cwd -Leaf
             if ($leaf) { $proj = $leaf }
         }
-        $safeProj = $proj -replace '[\\/:*?"<>|]', '_'
+        $safeProj = Get-SafeName $proj
     }
 } catch {}
 
@@ -63,13 +60,31 @@ if ($event -eq 'UserPromptSubmit') {
     exit 0
 }
 
+# ---------- 原始 payload 转储（排查用，保留最后 200 行） ----------
+# 放在 UserPromptSubmit 提前返回之后：那条路径用户每发一条消息都触发，
+# 不该为它做一次全量读 + 全量重写。
+function Write-RawDump($text) {
+    try {
+        # prompt 原文不入盘：它可能含源码、路径、密钥，而这个文件是要贴进 issue 的
+        $line = $text -replace '"prompt"\s*:\s*"(?:[^"\\]|\\.)*"', '"prompt":"<已省略>"'
+        if ($line.Length -gt 500) { $line = $line.Substring(0, 500) + '…(已截断)' }
+        Add-Content -Path $rawFile -Value ((Get-Date -Format 'HH:mm:ss') + ' ' + $line) -Encoding UTF8
+        $raw = @(Get-Content $rawFile -Encoding UTF8)
+        if ($raw.Count -gt 200) { $raw[-200..-1] | Set-Content -Path $rawFile -Encoding UTF8 }
+    } catch {}
+}
+Write-RawDump $json
+
 # ---------- 用户配置（由扩展导出成文件；读不到就用默认值，配置读取出问题不能影响通知主流程） ----------
 $cfgFile = Join-Path $temp 'cbh-config.json'
 $notifyOnComplete = $true
+# 通知来源标识。改它要连带改扩展侧的注册表/快捷方式，所以由扩展写进配置，这里不另写一份
+$aumid = 'CBH'
 try {
     if (Test-Path $cfgFile) {
         $c = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($null -ne $c.notifyOnComplete) { $notifyOnComplete = [bool]$c.notifyOnComplete }
+        if ($c.aumid) { $aumid = [string]$c.aumid }
     }
 } catch {}
 
@@ -77,17 +92,30 @@ function Write-Log($s) {
     try { Add-Content -Path $logFile -Value ((Get-Date -Format 'HH:mm:ss') + ' ' + $s) -Encoding UTF8 } catch {}
 }
 
-# ---------- VS Code 是否在前台 ----------
-# 扩展会维护 %TEMP%\cbh-focus-<pid>.txt（1=聚焦 / 0=失焦）。
-# 只要有一个 VS Code 窗口聚焦，就认为用户正看着编辑器，不必打扰。
-function Test-VSCodeFocused {
+# ---------- 当前任务所在项目是否正被用户看着 ----------
+# 扩展维护 %TEMP%\cbh-focus-<pid>.txt，格式：<1|0>|<工作区路径>[;<路径>...]（1=该窗口在前台）。
+# 只有"前台的那个窗口装的正是任务所在项目"时才静默：多窗口并行时用户在别的窗口干活，
+# 任务照样跑完，这时必须弹通知，否则完成通知会被静默光。
+# 旧格式（裸 1，扩展还没重载）一律忽略：宁可多弹一条，也不能漏掉完成通知。
+function Test-ProjectFocused($projectPath) {
+    if (-not $projectPath) { return $false }
+    $cur = ($projectPath -replace '\\', '/').TrimEnd('/')
     try {
         $focusFiles = @(Get-ChildItem -Path $temp -Filter 'cbh-focus-*.txt' -ErrorAction SilentlyContinue)
         foreach ($ff in $focusFiles) {
             # 超过 5 分钟没更新的视为失效（扩展已退出）
             if (((Get-Date) - $ff.LastWriteTime).TotalMinutes -gt 5) { continue }
-            $v = (Get-Content $ff.FullName -Raw -Encoding UTF8).Trim()
-            if ($v -eq '1') { return $true }
+            $line = (Get-Content $ff.FullName -Raw -Encoding UTF8).Trim()
+            $bar = $line.IndexOf('|')
+            if ($bar -lt 1) { continue }
+            if ($line.Substring(0, $bar) -ne '1') { continue }
+            foreach ($ws in $line.Substring($bar + 1).Split(';')) {
+                $w = $ws.Trim().TrimEnd('/')
+                if (-not $w) { continue }
+                # 任务可能跑在工作区的子目录里，所以路径相等或在其之下都算
+                if ($cur -eq $w) { return $true }
+                if ($cur.StartsWith($w + '/', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+            }
         }
     } catch {}
     return $false
@@ -96,7 +124,7 @@ function Test-VSCodeFocused {
 # ---------- 任务耗时（依赖 UserPromptSubmit 记录的起点） ----------
 function Get-TaskDuration($projName) {
     try {
-        $sp = $projName -replace '[\\/:*?"<>|]', '_'
+        $sp = Get-SafeName $projName
         $tf = Join-Path $temp "cbh-task-$sp.txt"
         if (-not (Test-Path $tf)) { return '' }
         $start = [int64]((Get-Content $tf -Raw -Encoding UTF8).Trim())
@@ -207,7 +235,7 @@ function Send-Toast($text, $title, $launch, $kind) {
         $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
         $xml.LoadXml('<toast' + $attr + '><visual><binding template="ToastGeneric"><text>' + $safeH + '</text><text>' + $safeT + '</text></binding></visual>' + $audioTag + '</toast>')
         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('CBH').Show($toast)
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($aumid).Show($toast)
 
         # 通知先出现，再起独立进程放自定义音效（不阻塞 hook）
         if ($useCustom -and $customFile -and (Test-Path $soundPlayer)) {
@@ -234,6 +262,40 @@ function Read-Tail($path, $maxBytes) {
     } catch { return '' }
 }
 
+# ---------- 定位本项目当天的日志，返回其中的日志行 ----------
+# 判"卡在等确认"和判"出错中断"共用这一份定位逻辑。
+# 日志文件名是 <项目名>__<32位hex>.log，必须按 __ 边界匹配：
+# 只写 ($projName + '*') 的话，App 会连 AppServer 的日志一起匹配 ——
+# 那就会把别的项目的 needConfirm 当成这个项目卡在等确认。
+# 找不到本项目的日志就返回空：宁可漏报，也不能张冠李戴。
+function Get-ProjectLogLines($projName) {
+    $lines = New-Object System.Collections.ArrayList
+    try {
+        # CBH_LOG_ROOT 仅用于本地测试覆盖
+        if ($env:CBH_LOG_ROOT) { $logRoot = $env:CBH_LOG_ROOT }
+        else { $logRoot = Join-Path $env:LOCALAPPDATA 'CodeBuddyExtension\Logs\VSCode' }
+        if (-not (Test-Path $logRoot)) { return $lines }
+        $dayDir = Join-Path $logRoot (Get-Date -Format 'yyyy-MM-dd')
+        if (-not (Test-Path $dayDir)) { return $lines }
+
+        $files = @(Get-ChildItem -Path $dayDir -Filter '*.log' -ErrorAction SilentlyContinue)
+        if ($files.Count -eq 0) { return $lines }
+
+        $target = $files | Where-Object { $_.Name -like ($projName + '__*') } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $target) { return $lines }
+
+        $tail = Read-Tail $target.FullName 262144
+        if (-not $tail) { return $lines }
+
+        # 只保留真正的日志行（以 [yyyy/M/d H:mm:ss.fff] 开头）。
+        # 否则会匹配到写进日志里的脚本源码文本（自指污染），导致误判。
+        foreach ($ln in ($tail -split "`r?`n")) {
+            if ($ln -match '^\[\d{4}/\d+/\d+ \d+:\d+:\d+(\.\d+)?\]') { [void]$lines.Add($ln) }
+        }
+    } catch {}
+    return $lines
+}
+
 # ---------- 判断是否卡在"等待用户确认" ----------
 # 依据 CodeBuddy 日志：
 #   [beforeExecute] Permission decision: source=safety_rule_ask, allowed=true, needConfirm=true   ← 请求用户确认
@@ -241,32 +303,7 @@ function Read-Tail($path, $maxBytes) {
 # 若最后一条 needConfirm=true 晚于最后一条 Permission response → 仍在等待用户确认
 function Test-WaitingConfirm($projName) {
     try {
-        # CBH_LOG_ROOT 仅用于本地测试覆盖
-        if ($env:CBH_LOG_ROOT) { $logRoot = $env:CBH_LOG_ROOT }
-        else { $logRoot = Join-Path $env:LOCALAPPDATA 'CodeBuddyExtension\Logs\VSCode' }
-        if (-not (Test-Path $logRoot)) { return $false }
-        $dayDir = Join-Path $logRoot (Get-Date -Format 'yyyy-MM-dd')
-        if (-not (Test-Path $dayDir)) { return $false }
-
-        $files = @(Get-ChildItem -Path $dayDir -Filter '*.log' -ErrorAction SilentlyContinue)
-        if ($files.Count -eq 0) { return $false }
-
-        # 优先本项目的日志，否则取最近写入的
-        $target = $files | Where-Object { $_.Name -like ($projName + '*') } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if (-not $target) {
-            $target = $files | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        }
-        if (-not $target) { return $false }
-
-        $tail = Read-Tail $target.FullName 262144
-        if (-not $tail) { return $false }
-
-        # 只保留真正的日志行（以 [yyyy/M/d H:mm:ss.fff] 开头）。
-        # 否则会匹配到写进日志里的脚本源码文本（自指污染），导致误判。
-        $logLines = New-Object System.Collections.ArrayList
-        foreach ($ln in ($tail -split "`r?`n")) {
-            if ($ln -match '^\[\d{4}/\d+/\d+ \d+:\d+:\d+(\.\d+)?\]') { [void]$logLines.Add($ln) }
-        }
+        $logLines = @(Get-ProjectLogLines $projName)
         if ($logLines.Count -eq 0) { return $false }
 
         # 从尾部往前扫，遇到的第一个"标志性事件"决定结论。
@@ -302,8 +339,67 @@ function Test-WaitingConfirm($projName) {
     } catch { return $false }
 }
 
-# 点击通知 → 打开对应 VS Code 项目
-if ($cwd) { $launchUrl = 'vscode://file/' + ($cwd -replace '\\', '/') } else { $launchUrl = '' }
+# ---------- 判断这次 Stop 是"真干完了"还是"出错中断" ----------
+# 撞上服务端错误（429 / 5xx / 内容审核拦截）时，CodeBuddy 自己只内部重试 1 次就收尾，
+# 日志里留下 onStepError，界面上是个"处理过程出现异常，请重试"的弹框。
+# 这种 Stop 不算完成：再弹一条"任务执行完成"会和那个弹框互相矛盾，
+# 用户会把失败当成跑完了（实测 08:57:58 报错、08:58:33 弹"完成 · 4m46s"）。
+# 从尾部往前扫，遇到的第一个"结局信号"决定结论。
+# run end 两种结局都写，所以不能拿它当信号。
+function Test-FailedEnd($projName) {
+    try {
+        $logLines = @(Get-ProjectLogLines $projName)
+        if ($logLines.Count -eq 0) { return $false }
+
+        for ($i = $logLines.Count - 1; $i -ge 0; $i--) {
+            $ln = $logLines[$i]
+
+            # 正常收尾。扩展自动补的重试跑通后尾部会补上这条，
+            # 那次 Stop 就该按完成算
+            if ($ln -match 'notifyAllStepsEnd' -or $ln -match 'onAllStepsEnd') { return $false }
+
+            # 出错收尾
+            if ($ln -match 'onStepError' -or $ln -match 'fullStream error part detected') {
+                # 新鲜度校验：太久远的是历史遗留，不能拿它给这次 Stop 定案。
+                # 宁可偶尔把失败说成完成，也不能因为扫到一条旧错误就不弹完成通知。
+                $m = [regex]::Match($ln, '^\[(\d{4}/\d+/\d+ \d+:\d+:\d+)')
+                if ($m.Success) {
+                    try {
+                        $t = [datetime]::ParseExact($m.Groups[1].Value, 'yyyy/M/d HH:mm:ss', $null)
+                        if (((Get-Date) - $t).TotalMinutes -gt 5) { return $false }
+                    } catch {}
+                }
+                return $true
+            }
+        }
+        return $false
+    } catch { return $false }
+}
+
+# 点击通知 → 打开对应 VS Code 项目。
+# 两个都会让点击"看着没反应"的坑：
+#   1) 文件夹 URL 必须带结尾 /，官方格式是 vscode://file/{full path to project}/
+#   2) 路径必须 percent-encode：含 # 会被当成片段截断，含 % 会被当成转义
+function Get-LaunchUrl($p) {
+    if (-not $p) { return '' }
+    $s = ($p -replace '\\', '/')
+    # EscapeDataString 会把分隔符和盘符冒号一并编码，再还原回来
+    $e = [System.Uri]::EscapeDataString($s) -replace '%2F', '/' -replace '%3A', ':'
+    if (-not $e.EndsWith('/')) { $e = $e + '/' }
+    return 'vscode://file/' + $e
+}
+
+$launchUrl = Get-LaunchUrl $cwd
+
+# 项目根目录落盘给扩展用。扩展按日志文件名认项目，文件名里只有项目名、没有全路径，
+# 拿不到路径就没法让通知点开对应项目。
+if ($cwd -and $safeProj) {
+    # 必须 BOM-less UTF-8：路径可能含中文，扩展按 UTF-8 读，
+    # 而 Set-Content -Encoding UTF8 在 PowerShell 5.1 下会带 BOM
+    try {
+        [System.IO.File]::WriteAllText((Join-Path $temp "cbh-path-$safeProj.txt"), $cwd, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {}
+}
 
 # ================= Notification 事件：需要用户操作 =================
 if ($event -eq 'Notification') {
@@ -349,8 +445,11 @@ if ($suppressed) { Write-Log "Stop: $proj 跳过(Notification已通知)"; exit 0
 # 读日志判断：agent 是"真干完了"还是"卡在等你确认"
 $waiting = Test-WaitingConfirm $proj
 
-# VS Code 在前台 → 用户正看着编辑器，不打扰。但仍然照常写日志，便于事后排查。
-$focused = Test-VSCodeFocused
+# 正看着任务所在的那个 VS Code 窗口 → 不打扰。但仍然照常写日志，便于事后排查。
+$focused = Test-ProjectFocused $cwd
+# 测试通知不受前台静默影响。要测的人当然正看着 VS Code，静默掉的话，
+# 用户点了"测试通知"什么也看不到，只会以为装失败了
+if ($isTest) { $focused = $false }
 $focusTag = ''
 if ($focused) { $focusTag = '(前台静默)' }
 
@@ -365,30 +464,39 @@ if ($waiting) {
 $allowToast = $true
 try {
     $throttleFile = Join-Path $temp "cbh-thr-$safeProj.txt"
-    if (Test-Path $throttleFile) {
+    # 测试通知同样不受节流限制
+    if (-not $isTest -and (Test-Path $throttleFile)) {
         $lastTs = [int64]((Get-Content $throttleFile -Raw -Encoding UTF8).Trim())
         if ([DateTimeOffset]::Now.ToUnixTimeMilliseconds() - $lastTs -lt 5000) { $allowToast = $false }
     }
 } catch { $throttleFile = $null }
 
 $dur = Get-TaskDuration $proj
+$willToast = $allowToast -and -not $focused -and $notifyOnComplete
+
+# 只在真要弹的时候才读日志：Stop 每次都触发，为它多读 256KB 不值得，
+# 而"节流跳过 / 前台静默 / 配置关闭"这三种情况下弹不弹已经定了，读了也没处用。
+$failed = $false
+if ($willToast) { $failed = Test-FailedEnd $proj }
+
 $skipTag = ''
 if (-not $allowToast) { $skipTag = '(节流跳过)' }
 if (-not $notifyOnComplete) { $skipTag = $skipTag + '(配置关闭)' }
-Write-Log "Stop: $proj | cwd=$cwd -> 完成$dur$skipTag$focusTag"
-
-if ($allowToast -and -not $focused -and $notifyOnComplete) {
-    # 只有真的弹了通知才消耗节流窗口
-    if ($throttleFile) { try { Set-Content -Path $throttleFile -Value ([DateTimeOffset]::Now.ToUnixTimeMilliseconds()) -Encoding UTF8 } catch {} }
-    Send-Toast "任务执行完成$dur" "【$proj】" $launchUrl "done"
+if ($failed) {
+    Write-Log "Stop: $proj | cwd=$cwd -> 中断(服务端错误，退出的那步没跑完)$dur$skipTag$focusTag"
+} else {
+    Write-Log "Stop: $proj | cwd=$cwd -> 完成$dur$skipTag$focusTag"
 }
 
-# 状态文件，供扩展去重
-try {
-    $ts = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
-    Add-Content -Path $stateFile -Value "$ts|$proj" -Encoding UTF8
-    $all = @(Get-Content $stateFile -Encoding UTF8)
-    if ($all.Count -gt 20) { $all[-20..-1] | Set-Content -Path $stateFile -Encoding UTF8 }
-} catch {}
+if ($willToast) {
+    # 只有真的弹了通知才消耗节流窗口。测试通知不算，否则紧接着来的真实通知会被它挤掉
+    if ($throttleFile -and -not $isTest) { try { Set-Content -Path $throttleFile -Value ([DateTimeOffset]::Now.ToUnixTimeMilliseconds()) -Encoding UTF8 } catch {} }
+    if ($failed) {
+        # 用 confirm 音：任务没跑完，需要人看一眼，不是完成音
+        Send-Toast "任务中断，未正常完成$dur" "【$proj】" $launchUrl "confirm"
+    } else {
+        Send-Toast "任务执行完成$dur" "【$proj】" $launchUrl "done"
+    }
+}
 
 exit 0

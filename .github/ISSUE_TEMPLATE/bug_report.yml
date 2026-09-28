@@ -1,5 +1,5 @@
-name: 问题反馈
-description: 通知没弹、重试没生效，或者别的不对劲
+name: 问题反馈 / Bug report
+description: 通知没弹、重试没生效，或者别的不对劲 / Notifications not showing, retry not working, or anything else off
 title: "[Bug] "
 labels: ["bug"]
 body:
@@ -9,6 +9,14 @@ body:
         提交之前，先看一眼 README 里的**故障对照表**，多数情况那里已经有答案。
 
         也建议先跑一次命令面板的 `CodeBuddy Helper: 显示运行日志`，日志通常直接指明原因。
+
+        ---
+
+        Before filing, check the **troubleshooting table** in the README — it answers most cases.
+        Also run `CodeBuddy Helper: 显示运行日志` from the command palette first; the log usually
+        names the cause outright.
+
+        The field labels below are in Chinese — **answering in English is perfectly fine.**
 
   - type: input
     id: winver
@@ -54,6 +62,9 @@ body:
       description: |
         `%TEMP%\cbh-hook.log` 的最后 30 行。
         里面会有你的项目名，**贴之前请把不想公开的部分删掉**。
+
+        如果还要 `%TEMP%\cbh-hook-raw.log`（原始 payload），它含**完整的命令与参数**，
+        同样请先自行删减。prompt 原文已经不会被记进去了。
       render: text
     validations:
       required: false
