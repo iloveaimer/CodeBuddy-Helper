@@ -19,11 +19,13 @@ const E = {};          // 项目 → { code, count, next, warned }
 const W = {};          // 项目 → { ts, cmd, notified, reminded }  危险命令等待确认
 const R = {};          // 项目 → { ts, logTs, code, cid, retried }  待处理的服务端错误
 const MAX = 10;
-const CONFIRM_WAIT = 20000;    // 等待超过 20 秒 → 第一次提醒（agent 此时不 Stop，hook 覆盖不到）
+// 两个阈值都刻意压得很短：确认框弹出来后人就在等，20 秒 / 3 分钟那个量级他已经开始干等了；
+// 这一层本来只是"hook 没覆盖到"时的兜底，早弹一条不打扰，晚弹一条等于白弹。
+const CONFIRM_WAIT = 5000;     // 等待超过 5 秒 → 第一次提醒（agent 此时不 Stop，hook 覆盖不到）
 // 三条提醒路径（hook 的 Notification、hook 的 Stop、下面这条兜底）各自只响一次，
 // 用户漏看就再也不会响，而 CodeBuddy 没有确认超时、任务会一直挂着。等满这么久再补一次。
 // 两个阈值都从等待开始那一刻算起，不是从第一次提醒算起
-const CONFIRM_REMIND = 180000;
+const CONFIRM_REMIND = 60000;
 const RETRY_GRACE = 20000;    // 错误出现后等这么久再重试，给"已自行恢复"的日志写入时间
 const RETRY_WINDOW = 1800000; // 只处理 30 分钟内的错误，更早的视为历史遗留
 const HOOK_WAIT_WINDOW = 180000; // hook 发过的"待确认"通知保质期，与 cb-hook.ps1 判卡住用的 3 分钟新鲜度对齐
@@ -35,6 +37,11 @@ const AUMID_LNK = path.join(ROAM_APP, "Microsoft", "Windows", "Start Menu", "Pro
 // 否则扩展按 cbh-path-<项目名>.txt 取不到 hook 写下的项目路径
 const SAFE_RE = /[\\/:*?"<>|]/g;
 const safeName = (n) => String(n).replace(SAFE_RE, "_");
+// 自定义音效目录与允许的扩展名。cb-hook.ps1 里有同一份规则（$soundsDir / $SOUND_EXTS），
+// 两条通知路径必须听同一个音，改一处就得改另一处。
+// 挑选顺序也和 hook 一致：先看设置里指定的文件 → 目录里同用途的 → 目录里唯一的 → default.*
+const SOUNDS_DIR = path.join(os.homedir(), ".codebuddy-helper", "sounds");
+const SOUND_EXTS = [".wav", ".mp3", ".m4a", ".wma", ".aac", ".flac", ".ogg"];
 
 // 跨实例通知去重。每个 VS Code 窗口一个扩展宿主，都会看到同一批日志和同一条 hook 状态，
 // 于是同一条消息会被每个窗口各弹一次 —— 而 Toast 是全局的，用户看到的是重复通知。
@@ -56,7 +63,7 @@ function dupNotify(msg) {
 }
 
 // 用户配置（VS Code 设置 → CodeBuddy Helper）。改设置即时生效，见 activate 里的 onDidChangeConfiguration
-let cfg = { pollInterval: 3000, retryCooldown: 30000, retryDelay: 5, notifyOnComplete: true, notifyOn429: true };
+let cfg = { pollInterval: 3000, retryCooldown: 30000, retryDelay: 5, notifyOnComplete: true, notifyOn429: true, notifyWhenFocused: true, soundDone: "", soundConfirm: "" };
 
 // 全局重试队列：429 是账号级限流，多个项目同时重试只会继续撞墙，串行处理
 const queue = [];
@@ -78,14 +85,24 @@ function refreshCfg() {
         retryCooldown: Math.max(5, c.get("retryCooldown", 30)) * 1000,
         retryDelay: Math.max(1, c.get("retryDelay", 5)),
         notifyOnComplete: c.get("notifyOnComplete", true) !== false,
-        notifyOn429: c.get("notifyOn429", true) !== false
+        notifyOn429: c.get("notifyOn429", true) !== false,
+        notifyWhenFocused: c.get("notifyWhenFocused", true) !== false,
+        soundDone: String(c.get("soundDone", "") || ""),
+        soundConfirm: String(c.get("soundConfirm", "") || "")
     };
     try {
         // aumid 一并导给 hook：Toast 的来源标识只在这里定义一处，
-        // hook 侧不另写一份（改漏一处通知就静默变成"未知程序"）
-        fs.writeFileSync(CFG_FILE, JSON.stringify({ notifyOnComplete: cfg.notifyOnComplete, aumid: AUMID }), "utf-8");
+        // hook 侧不另写一份（改漏一处通知就静默变成"未知程序"）。
+        // 前台静默与提示音都是在 hook 里读的，所以这两项也必须导过去
+        fs.writeFileSync(CFG_FILE, JSON.stringify({
+            notifyOnComplete: cfg.notifyOnComplete,
+            notifyWhenFocused: cfg.notifyWhenFocused,
+            soundDone: cfg.soundDone,
+            soundConfirm: cfg.soundConfirm,
+            aumid: AUMID
+        }), "utf-8");
     } catch (_) {}
-    l(`cfg: poll=${cfg.pollInterval}ms cooldown=${cfg.retryCooldown}ms delay=${cfg.retryDelay}s complete=${cfg.notifyOnComplete} 429=${cfg.notifyOn429}`);
+    l(`cfg: poll=${cfg.pollInterval}ms cooldown=${cfg.retryCooldown}ms delay=${cfg.retryDelay}s complete=${cfg.notifyOnComplete} 429=${cfg.notifyOn429} focused=${cfg.notifyWhenFocused} sound=${cfg.soundDone || cfg.soundConfirm ? "custom" : "default"}`);
 }
 
 // 项目名 → 可点击的项目 URL。
@@ -112,6 +129,28 @@ function projectUrl(proj) {
     return "vscode://file/" + e + "/";
 }
 
+// 提示音取哪个文件。顺序与 cb-hook.ps1 的 Get-SoundFile 完全一致：
+// 设置里指定的路径 → 音效目录里同用途的 → 目录里唯一的那个 → default.* → 空（交给 Windows 默认音）。
+// 两条通知路径必须听同一个音，改这里就要同步改 hook 那份。
+function soundFor(kind) {
+    const configured = kind === "confirm" ? cfg.soundConfirm : cfg.soundDone;
+    if (configured) return configured;
+    try {
+        const files = fs.readdirSync(SOUNDS_DIR).filter((f) => SOUND_EXTS.includes(path.extname(f).toLowerCase()));
+        if (!files.length) return "";
+        const base = (f) => path.basename(f, path.extname(f)).toLowerCase();
+        const named = files.find((f) => base(f) === kind);
+        if (named) return path.join(SOUNDS_DIR, named);
+        if (files.length === 1) return path.join(SOUNDS_DIR, files[0]);
+        const def = files.find((f) => base(f) === "default");
+        return def ? path.join(SOUNDS_DIR, def) : "";
+    } catch (_) { return ""; }
+}
+
+// 需要人动手处理的那些通知用 confirm 音，其余（重试进度、安装提示）用 done 音。
+// 判断集中在这里，调用点就不必各写一遍 —— 文案就是本文件的常量，改文案时记得回来看这条正则
+const NEEDS_ACTION = /待你确认|仍在等你确认|令牌过期|已达 \d+ 次上限|hook 异常|未检测到 CodeBuddy/;
+
 // 通知：仅 Windows Toast，不做 VS Code 弹窗（避免每次完成任务都弹窗打扰）
 // 传了 proj 就把项目路径写进 launch，点通知能切到那个项目；
 // 不带 launch 的 Toast 被点击时是没有任何反应的。
@@ -124,16 +163,21 @@ function notify(msg, proj) {
         const xml = msg.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
         const url = proj ? projectUrl(proj) : "";
         const attr = url ? ` activationType="protocol" launch="${url}"` : "";
+        // 有自定义音效时让 Toast 自己静音，改由 cb-sound.ps1 播，否则两声叠在一起
+        const snd = soundFor(NEEDS_ACTION.test(msg) ? "confirm" : "done");
+        const audio = snd ? '<audio silent="true"/>' : '<audio src="ms-winsoundevent:Notification.Default"/>';
         fs.writeFileSync(f, "\ufeff" + `[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]|Out-Null
 [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom,ContentType=WindowsRuntime]|Out-Null
 $x=New-Object Windows.Data.Xml.Dom.XmlDocument
-$x.LoadXml('<toast${attr}><visual><binding template="ToastGeneric"><text>${xml}</text></binding></visual></toast>')
+$x.LoadXml('<toast${attr}><visual><binding template="ToastGeneric"><text>${xml}</text></binding></visual>${audio}</toast>')
 $n=[Windows.UI.Notifications.ToastNotification]::new($x)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${AUMID}').Show($n)
 `, "utf-8");
         cp.exec(`powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File "${f}"`, () => {
             setTimeout(() => { try { fs.unlinkSync(f); } catch (_) {} }, 5000);
         });
+        // 通知先出现，再起独立进程放音（不阻塞轮询）
+        if (snd) cp.exec(`powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${path.join(__dirname, "cb-sound.ps1")}" "${snd}"`, () => {});
     } catch (_) {}
 }
 
@@ -553,10 +597,51 @@ function activate(ctx) {
     // 命令：打开自定义音效目录
     ctx.subscriptions.push(
         vscode.commands.registerCommand("codebuddyHelper.openSoundsDir", () => {
-            const dir = path.join(os.homedir(), ".codebuddy-helper", "sounds");
-            try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
-            vscode.env.openExternal(vscode.Uri.file(dir));
-            l(`openSoundsDir: ${dir}`);
+            try { fs.mkdirSync(SOUNDS_DIR, { recursive: true }); } catch (_) {}
+            vscode.env.openExternal(vscode.Uri.file(SOUNDS_DIR));
+            l(`openSoundsDir: ${SOUNDS_DIR}`);
+        })
+    );
+
+    // 命令：选择提示音。音效目录里的文件和 Windows 自带的系统音效都列在这里，挑完直接写进设置 ——
+    // 否则用户得先翻目录放文件、再回设置里手填绝对路径，两件事都容易做错。
+    ctx.subscriptions.push(
+        vscode.commands.registerCommand("codebuddyHelper.pickSound", async () => {
+            const mediaDir = path.join(process.env.SystemRoot || "C:\\Windows", "Media");
+            const items = [{ label: "Windows 默认通知音", description: "不指定音频文件，用系统默认音", value: "" }];
+            const push = (dir, title) => {
+                let files = [];
+                try {
+                    files = fs.readdirSync(dir)
+                        .filter((f) => SOUND_EXTS.includes(path.extname(f).toLowerCase()))
+                        .sort();
+                } catch (_) { return; }
+                if (!files.length) return;
+                items.push({ label: title, kind: vscode.QuickPickItemKind.Separator });
+                for (const f of files) {
+                    items.push({ label: path.basename(f, path.extname(f)), description: f, value: path.join(dir, f) });
+                }
+            };
+            push(SOUNDS_DIR, "音效目录");
+            push(mediaDir, `Windows 系统音效（${mediaDir}）`);
+
+            const pick = await vscode.window.showQuickPick(items, {
+                placeHolder: "选一个提示音（Esc 取消）",
+                matchOnDescription: true
+            });
+            if (!pick) return;
+            const where = await vscode.window.showQuickPick([
+                { label: "任务完成", value: ["soundDone"] },
+                { label: "待确认 / 任务中断", value: ["soundConfirm"] },
+                { label: "两个都用它", value: ["soundDone", "soundConfirm"] }
+            ], { placeHolder: `把「${pick.label}」用在什么时候？` });
+            if (!where) return;
+
+            const conf = vscode.workspace.getConfiguration("codebuddyHelper");
+            for (const k of where.value) await conf.update(k, pick.value, vscode.ConfigurationTarget.Global);
+            l(`pickSound: ${where.value.join("+")} = ${pick.value || "(系统默认)"}`);
+            vscode.window.showInformationMessage(
+                `CodeBuddy Helper: ${where.label} 的提示音已设为「${pick.value ? pick.label : "Windows 默认通知音"}」，立即生效`);
         })
     );
 
@@ -677,7 +762,7 @@ function activate(ctx) {
                 else { notify(`【${k}】有命令待你确认`, k); l(`confirm-wait:${k} ${w.cmd}`); }
                 continue;   // 一轮只弹一条：扩展被系统挂起很久后醒来，别把两次提醒挤在一起
             }
-            // 等满 3 分钟仍没人动 → 补一次。三条提醒路径全都只响一次，Stop 又不是心跳，
+            // 等满 1 分钟仍没人动 → 补一次。三条提醒路径全都只响一次，Stop 又不是心跳，
             // 漏看就再也不会响，而 CodeBuddy 自身没有确认超时，任务会一直挂在
             // waiting_user_input、agent 原地闲着。这里刻意不看 hookSaidWaiting：
             // hook 那条同样是单次的，拿它当理由跳过就等于放弃兜底。

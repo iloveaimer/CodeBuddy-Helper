@@ -5,6 +5,82 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.7] - 2026-09-20
+
+提示音终于能在插件里改了，不用再去翻目录放文件。
+
+此前只能把音频文件丢进 `%USERPROFILE%\.codebuddy-helper\sounds` 并按 `done.*` / `confirm.*` 命名；
+想换个 Windows 自带的系统音效，还得自己跑一趟 `C:\Windows\Media\` 找到、复制、改名。
+用户的原话是「不能在插件里面改吗」。
+
+### 新增
+
+- **命令 `CodeBuddy Helper: 选择提示音`。** 列出 Windows 的全部系统音效与音效目录里已有的文件，
+  选中后再选用在「任务完成」「待确认 / 任务中断」还是「两个都用它」，直接写进设置并立即生效。
+- **设置 `soundDone` / `soundConfirm`**（字符串，默认空）。想手填音频文件的绝对路径也可以。
+- **扩展自己发的那批通知也吃自定义音效了**（此前只有 hook 发的那批会响）。有自定义音效时 Toast
+  会被设成静音、改由 `cb-sound.ps1` 播放，避免两声叠在一起。两类通知共用同一套挑选规则：
+  设置里指定的文件 → 音效目录里同用途的 → 目录里唯一的 → `default.*` → Windows 默认通知音。
+  扩展侧按语义分音：需要人动手的（待确认 / 令牌过期 / 重试上限 / hook 异常）走 `confirm` 音，
+  其余（重试进度、安装提示）走 `done` 音。
+
+### 说明
+
+- 设置里的路径失效（文件被删或移走）时静默回退到目录约定，不会因为一个失效路径就不响。
+- `verify.ps1` 新增一项：提示音配置必须扩展与 hook 两头都接上 —— 只接一头的话，
+  用户在设置里改完毫无反应，而且不报任何错。
+
+## [1.2.6] - 2026-09-20
+
+扩展详情页按 VS Code 扩展页的惯例重做了一遍：补图标、规范化描述与 README 结构。
+
+### 变更
+
+- **补上扩展图标**（`icon.png`，128×128）。此前 `package.json` 里没有 `icon`，
+  扩展列表与详情页显示的是默认灰块。
+- **`description` 改成一句话英文描述**：`Zero-delay task notifications and automatic retry for
+  CodeBuddy (Windows + VS Code)`。此前是中文短语「CodeBuddy 任务完成通知 + 自动重试」——
+  同类扩展一律用英文一句话概括价值，中文短语在 Marketplace 与详情页头部都不合惯例。
+- 补 `author`（Neos，与 LICENSE 一致）与 `galleryBanner`（底色 `#1f6feb`，与图标同色）。
+- `keywords` 从 6 个扩到 8 个，补 `auto-retry` / `hook` / `task-notification`。
+- **README 按扩展页规范重排**：H1 下补一句话摘要（blockquote）；章节改回通用名称
+  （功能 / 环境要求 / 安装 / 使用 / 设置 / 常见问题 / 卸载 / 参与开发 / 许可）；
+  去掉逐节之间的水平线；补上此前只在命令面板里存在的「命令」表。
+  内容未删减，中英两版结构完全对齐。
+
+### 说明
+
+- `package-vsix.ps1` 把 `icon.png` 打进 VSIX，`[Content_Types].xml` 补 `png` 声明；
+  `verify.ps1` 新增三项检查：包内含 `icon.png`、`package.json` 声明了 `icon`、
+  图标确实是 128×128 的 PNG —— 尺寸不合规时 VS Code 只会静默显示灰块，不报任何错。
+
+## [1.2.5] - 2026-09-20
+
+把两处「等太久」的默认值调紧了：盯着窗口也弹通知、待确认提醒从 5 秒起。
+
+### 变更
+
+- **前台静默默认关闭：任务所在的那个窗口正被看着时，完成通知照样弹。** 此前只要人盯着那个窗口
+  就不弹，本意是"不打扰"，实际效果却是通知被静默掉、看起来像插件没反应 —— 而漏报的代价比多弹
+  一条大得多（项目里其它地方一直是这个取向：宁可多弹，不能漏）。改由 `notifyWhenFocused`
+  控制（默认开），想恢复"只提醒其它窗口"把它关掉即可。
+- **待确认提醒的阈值整体压缩**：第一次提醒从「等待满 20 秒」改成**满 5 秒**，漏看后的补提醒从
+  「满 3 分钟」改成**满 1 分钟**。确认框弹出来后人就在等，20 秒 / 3 分钟那个量级他已经开始干等了；
+  这一层本来只是 hook 没覆盖到时的兜底，早弹一条不打扰，晚弹一条等于白弹。
+
+### 修复
+
+- **`cb-hook.ps1` 在 stdin 带 UTF-8 BOM 时会整体静默失效。** `ConvertFrom-Json` 碰到 BOM 会
+  整体解析失败，于是所有字段都为空、脚本在事件判断那步直接退出：通知一条都不弹，
+  日志里也查不到任何痕迹。实测从别的 PowerShell 用管道喂 payload 就会带上 BOM
+  （扩展走 Node 写 stdin 不会，所以线上一直没暴露）。现在读进来先剥掉开头的 BOM。
+
+### 说明
+
+- 「完成通知来得晚」不在插件侧：实测 `notifyAllStepsEnd`（agent 内部结束）与 hook 的 `Stop`
+  落在同一秒（`09:40:24.528` → `09:40:24`），hook 从触发到发 Toast 之间没有等待。
+  若还是觉得晚或压根收不到，先看 Windows 的「专注助手 / 勿扰」是否把横幅收进了通知中心。
+
 ## [1.2.4] - 2026-09-20
 
 「服务出现异常，请重试」（错误码 500）这类错误也能自动续跑了。
@@ -220,6 +296,12 @@ hook 发的那批通知；扩展自己发的那批**完全没有跳转信息**�
 
 内部里程碑：跑通 VS Code 扩展 + Windows Toast 通知的基本链路。
 
+[1.2.7]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.6...v1.2.7
+[1.2.6]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.5...v1.2.6
+[1.2.5]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.4...v1.2.5
+[1.2.4]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.3...v1.2.4
+[1.2.3]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.2...v1.2.3
+[1.2.2]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.0.0...v1.1.0

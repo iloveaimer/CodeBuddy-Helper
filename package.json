@@ -1,15 +1,18 @@
 {
   "name": "codebuddy-helper",
   "displayName": "CodeBuddy Helper",
-  "description": "CodeBuddy 任务完成通知 + 自动重试",
-  "version": "1.2.4",
+  "description": "Zero-delay task notifications and automatic retry for CodeBuddy (Windows + VS Code)",
+  "version": "1.2.7",
   "publisher": "local",
+  "author": "Neos",
+  "icon": "icon.png",
   "license": "MIT",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other"],
-  "keywords": ["codebuddy", "notification", "toast", "windows", "429", "retry"],
+  "keywords": ["codebuddy", "notification", "toast", "windows", "retry", "auto-retry", "hook", "task-notification"],
   "repository": { "type": "git", "url": "https://github.com/iloveaimer/CodeBuddy-Helper.git" },
   "homepage": "https://github.com/iloveaimer/CodeBuddy-Helper#readme",
+  "galleryBanner": { "color": "#1f6feb", "theme": "dark" },
   "bugs": { "url": "https://github.com/iloveaimer/CodeBuddy-Helper/issues" },
   "activationEvents": ["*"],
   "extensionKind": ["ui"],
@@ -17,6 +20,7 @@
   "contributes": {
     "commands": [
       { "command": "codebuddyHelper.test", "title": "CodeBuddy Helper: 测试通知" },
+      { "command": "codebuddyHelper.pickSound", "title": "CodeBuddy Helper: 选择提示音" },
       { "command": "codebuddyHelper.openSoundsDir", "title": "CodeBuddy Helper: 打开通知音效目录" },
       { "command": "codebuddyHelper.showOutput", "title": "CodeBuddy Helper: 显示运行日志" },
       { "command": "codebuddyHelper.installHooks", "title": "CodeBuddy Helper: 修复通知配置" },
@@ -51,10 +55,25 @@
           "default": true,
           "description": "任务完成时弹 Windows 通知"
         },
+        "codebuddyHelper.notifyWhenFocused": {
+          "type": "boolean",
+          "default": true,
+          "description": "任务所在窗口正被看着时也弹通知（关掉则只在别的窗口时提醒，避免打扰）"
+        },
         "codebuddyHelper.notifyOn429": {
           "type": "boolean",
           "default": true,
           "description": "限流 / 服务端错误 / 内容审核拦截时弹 Windows 通知并自动重试"
+        },
+        "codebuddyHelper.soundDone": {
+          "type": "string",
+          "default": "",
+          "description": "任务完成时的提示音：音频文件绝对路径。留空则用音效目录里的 done.* / default.*，都没有就用 Windows 默认通知音"
+        },
+        "codebuddyHelper.soundConfirm": {
+          "type": "string",
+          "default": "",
+          "description": "有命令待确认或任务中断时的提示音：音频文件绝对路径。留空则用音效目录里的 confirm.* / default.*，都没有就用 Windows 默认通知音"
         }
       }
     }

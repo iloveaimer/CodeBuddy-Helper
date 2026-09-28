@@ -85,9 +85,24 @@ if (Test-Path -LiteralPath $vsix) {
         # 必须用 -LiteralPath：[] 在 PowerShell 路径里是通配符，[Content_Types].xml 会匹配不到
         foreach ($need in @('extension\extension.js', 'extension\package.json', 'extension\cb-hook.ps1',
                             'extension\cb-sound.ps1', 'extension\README.md', 'extension\LICENSE',
-                            'extension.vsixmanifest', '[Content_Types].xml')) {
+                            'extension\icon.png', 'extension.vsixmanifest', '[Content_Types].xml')) {
             if (Test-Path -LiteralPath (Join-Path $tmp $need)) { Good ('包内含 ' + $need) }
             else { Bad ('包里缺 ' + $need) }
+        }
+
+        # 图标三件事都得对：package.json 里声明了 icon、文件在包里、而且是 128×128 的 PNG。
+        # 尺寸不合规时 VS Code 直接不显示图标，什么错都不报，只会看到一个默认灰块。
+        $icoSrc = Join-Path $src 'icon.png'
+        if (-not $pkg -or -not $pkg.icon) { Bad 'package.json 没声明 icon，扩展列表里会显示成默认灰块' }
+        elseif (-not (Test-Path -LiteralPath $icoSrc)) { Bad ('package.json 声明了 icon = ' + $pkg.icon + '，但文件不存在') }
+        else {
+            Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+            try {
+                $img = [System.Drawing.Image]::FromFile($icoSrc)
+                if ($img.Width -eq 128 -and $img.Height -eq 128) { Good 'icon.png 是 128×128 的 PNG' }
+                else { Bad ('icon.png 尺寸应为 128×128，实际 ' + $img.Width + 'x' + $img.Height) }
+                $img.Dispose()
+            } catch { Bad ('icon.png 不是可读的图片: ' + $_.Exception.Message) }
         }
 
         # 包里的脚本必须和源文件逐字节一致，否则等于装了个旧版本
@@ -212,6 +227,25 @@ if ($jsText -match 'wsPaths') {
     Good 'extension.js 上报焦点时带上了本窗口的工作区路径'
 } else {
     Bad 'extension.js 没上报工作区路径，hook 无法判断任务是否就在前台那个窗口'
+}
+
+# 前台静默会把"人正盯着那个窗口"时的完成通知吃掉，用户只会当成插件没反应。
+# 默认改成盯着也弹，由 notifyWhenFocused 开关决定；静默是在 hook 里判的，
+# 所以配置必须两端都接上（扩展写进 cbh-config.json，hook 读出来）。
+if ($hookText -match 'notifyWhenFocused' -and $jsText -match 'notifyWhenFocused') {
+    Good '前台「盯着也弹」开关两端都接上了'
+} else {
+    Bad 'notifyWhenFocused 只实现了一侧，前台静默仍会吃掉完成通知'
+}
+
+# 提示音要在插件里能改：设置里有两个字符串项，「选择提示音」命令负责挑文件并写设置。
+# 扩展把值导进 cbh-config.json、hook 读出来播放 —— 只接一头的话，用户在设置里改完毫无反应，
+# 而且不会报任何错，最难查的那种。
+if ($jsText -match 'soundFor' -and $jsText -match 'codebuddyHelper\.pickSound' -and
+    $hookText -match 'soundDone' -and $hookText -match 'soundConfirm') {
+    Good '提示音能在设置/命令里改，且扩展与 hook 两端都接了'
+} else {
+    Bad '提示音的配置没接全：在设置里改了不会生效'
 }
 
 # 日志目录是当天所有项目共用的（实测同时有 5 个项目的日志）。不按本窗口项目筛的话：

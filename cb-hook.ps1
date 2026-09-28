@@ -9,6 +9,10 @@ try {
     $json = $reader.ReadToEnd()
     $reader.Close()
 } catch {}
+# 防御：stdin 若带 UTF-8 BOM，ConvertFrom-Json 会整体解析失败，于是所有字段都为空、
+# 这个脚本在事件判断那步静默退出——通知全失效，日志里却什么都看不到。实测从别的
+# PowerShell 用管道喂 payload 就会带上 BOM，而扩展（Node 写 stdin）不会。
+if ($json) { $json = $json.TrimStart([char]0xFEFF) }
 
 $temp = $env:TEMP
 $logFile = Join-Path $temp 'cbh-hook.log'
@@ -78,12 +82,21 @@ Write-RawDump $json
 # ---------- 用户配置（由扩展导出成文件；读不到就用默认值，配置读取出问题不能影响通知主流程） ----------
 $cfgFile = Join-Path $temp 'cbh-config.json'
 $notifyOnComplete = $true
+# 任务所在的那个窗口正在前台时是否也弹。默认弹：人盯着那个窗口同样需要知道"跑完了"，
+# 静默掉只会被当成"通知坏了"，而漏报的代价比多弹一条大得多
+$notifyWhenFocused = $true
+# 在 VS Code 设置或"选择提示音"命令里挑的音频文件（绝对路径）。空 = 用音效目录里的约定文件名
+$soundDone = ''
+$soundConfirm = ''
 # 通知来源标识。改它要连带改扩展侧的注册表/快捷方式，所以由扩展写进配置，这里不另写一份
 $aumid = 'CBH'
 try {
     if (Test-Path $cfgFile) {
         $c = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($null -ne $c.notifyOnComplete) { $notifyOnComplete = [bool]$c.notifyOnComplete }
+        if ($null -ne $c.notifyWhenFocused) { $notifyWhenFocused = [bool]$c.notifyWhenFocused }
+        if ($c.soundDone) { $soundDone = [string]$c.soundDone }
+        if ($c.soundConfirm) { $soundConfirm = [string]$c.soundConfirm }
         if ($c.aumid) { $aumid = [string]$c.aumid }
     }
 } catch {}
@@ -189,6 +202,10 @@ $SOUND_EXTS = @('.wav', '.mp3', '.m4a', '.wma', '.aac', '.flac', '.ogg')
 
 function Get-SoundFile($kind) {
     try {
+        # 设置里（或在"选择提示音"命令里）挑中的文件优先：那是用户显式指定的，比目录命名约定更明确。
+        # 路径失效时静默回退到目录/系统默认音，不能因为一个被删掉的文件就整个不响
+        if ($kind -eq 'confirm' -and $soundConfirm -and (Test-Path -LiteralPath $soundConfirm)) { return $soundConfirm }
+        if ($kind -eq 'done' -and $soundDone -and (Test-Path -LiteralPath $soundDone)) { return $soundDone }
         if (-not (Test-Path $soundsDir)) { return $null }
         $files = @(Get-ChildItem -Path $soundsDir -File -ErrorAction SilentlyContinue |
                    Where-Object { $SOUND_EXTS -contains $_.Extension.ToLower() })
@@ -445,13 +462,19 @@ if ($suppressed) { Write-Log "Stop: $proj 跳过(Notification已通知)"; exit 0
 # 读日志判断：agent 是"真干完了"还是"卡在等你确认"
 $waiting = Test-WaitingConfirm $proj
 
-# 正看着任务所在的那个 VS Code 窗口 → 不打扰。但仍然照常写日志，便于事后排查。
+# 正看着任务所在的那个 VS Code 窗口 → 默认不打扰。仍然照常写日志，便于事后排查。
 $focused = Test-ProjectFocused $cwd
 # 测试通知不受前台静默影响。要测的人当然正看着 VS Code，静默掉的话，
 # 用户点了"测试通知"什么也看不到，只会以为装失败了
 if ($isTest) { $focused = $false }
 $focusTag = ''
-if ($focused) { $focusTag = '(前台静默)' }
+if ($focused -and $notifyWhenFocused) {
+    # 配置要求"盯着也弹"：静默掉的通知会被当成"插件没反应"。仍然记下前台状态，便于事后排查
+    $focusTag = '(前台·按配置照弹)'
+    $focused = $false
+} elseif ($focused) {
+    $focusTag = '(前台静默)'
+}
 
 if ($waiting) {
     Write-Log "Stop: $proj | cwd=$cwd -> 等待用户确认$focusTag"

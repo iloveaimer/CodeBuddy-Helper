@@ -29,6 +29,8 @@ Copy-Item "$src\cb-sound.ps1" "$tmpDir\extension\" -Force
 Copy-Item "$src\README.md" "$tmpDir\extension\" -Force
 Copy-Item "$src\README.en.md" "$tmpDir\extension\" -Force
 Copy-Item "$src\LICENSE" "$tmpDir\extension\" -Force
+# 图标同样要进包：扩展列表和详情页读的是扩展目录里的 icon.png（package.json 的 icon 字段）
+Copy-Item "$src\icon.png" "$tmpDir\extension\" -Force
 
 @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -59,6 +61,7 @@ Set-Content -Path "$tmpDir\c" -Value @"
   <Default Extension="js" ContentType="application/javascript" />
   <Default Extension="ps1" ContentType="application/octet-stream" />
   <Default Extension="md" ContentType="text/markdown" />
+  <Default Extension="png" ContentType="image/png" />
   <Override PartName="/extension/LICENSE" ContentType="text/plain" />
 </Types>
 "@ -Encoding UTF8
