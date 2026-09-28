@@ -5,6 +5,27 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.10] - 2026-09-28
+
+把发布者标识从 `local` 改成 `iloveaimer`，扩展 ID 随之变为 `iloveaimer.codebuddy-helper`。
+
+`local` 是打包时的占位发布者（`package.json` 里没写 `publisher` 时 vscode 用的那个），
+扩展详情页顶部就显示成 "local"，看着不像一个正式发布的扩展。
+
+### 变更
+
+- `publisher`：`local` → `iloveaimer`；扩展 ID：`local.codebuddy-helper` → `iloveaimer.codebuddy-helper`。
+- `install.ps1` 装新版前会先卸掉旧 ID 版本。不卸的话两个 ID 会并存，两个实例各自轮询日志、
+  各自弹通知，用起来就是「每条通知弹两遍」。
+- `uninstall.ps1` 两个 ID 都认，残留目录清理也改成 `*codebuddy-helper*`，新旧都收得干净。
+- `verify.ps1` 新增一项：`install.ps1` / `uninstall.ps1` 里硬编码的扩展 ID 必须与
+  `package.json` 的 `publisher` + `name` 一致 —— 这次正是改了 publisher 才发现脚本里还藏着一份。
+
+### 升级提示
+
+直接跑 `install.bat` 即可，它会自动卸掉旧 ID 版本。**设置项与自定义音效目录都不受影响**
+（设置的命名空间一直是 `codebuddyHelper`，与扩展 ID 无关）。
+
 ## [1.2.9] - 2026-09-28
 
 把本地 3 GB 日志（52 个文件、09-15 至 09-28）里出现过的错误形态全过了一遍：只补一条真漏的，
@@ -353,6 +374,7 @@ hook 发的那批通知；扩展自己发的那批**完全没有跳转信息**�
 
 内部里程碑：跑通 VS Code 扩展 + Windows Toast 通知的基本链路。
 
+[1.2.10]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.9...v1.2.10
 [1.2.9]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.8...v1.2.9
 [1.2.8]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.7...v1.2.8
 [1.2.7]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.6...v1.2.7

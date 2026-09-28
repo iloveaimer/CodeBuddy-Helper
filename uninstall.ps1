@@ -4,7 +4,9 @@
 # 顺序不能反：先清 hook，再卸扩展。反过来的话 settings.json 里会留一条指向已删脚本的
 # hook，CodeBuddy 之后每次 Stop 都会去跑一个不存在的文件。
 $ErrorActionPreference = 'Continue'
-$extId = 'local.codebuddy-helper'
+$extId = 'iloveaimer.codebuddy-helper'
+# 1.2.10 之前的安装用的是这个 ID。卸载是给人收尾用的，两个都认，不能只认新的
+$oldId = 'local.codebuddy-helper'
 $settings = Join-Path $env:USERPROFILE '.codebuddy\settings.json'
 
 function Say-Ok($s)   { Write-Host ('  ' + $s) -ForegroundColor Green }
@@ -76,9 +78,17 @@ else {
 }
 
 if ($cli) {
-    & $cli --uninstall-extension $extId 2>$null
-    if ($LASTEXITCODE -eq 0) { Say-Ok ('已通过 ' + $cli + ' 卸载') }
-    else { Say-Warn '卸载命令返回非零，可能本来就没装，继续清理残留目录' }
+    # 新旧两个 ID 都过一遍：1.2.10 之前装的是 local.codebuddy-helper
+    $done = $false
+    foreach ($id in @($extId, $oldId)) {
+        $installed = @(& $cli --list-extensions 2>$null)
+        if ($installed -contains $id) {
+            & $cli --uninstall-extension $id 2>$null
+            if ($LASTEXITCODE -eq 0) { Say-Ok ('已通过 ' + $cli + ' 卸载 ' + $id); $done = $true }
+            else { Say-Warn ('卸载 ' + $id + ' 返回非零，继续清理残留目录') }
+        }
+    }
+    if (-not $done) { Say-Ok '本来就没装，或已在前一步卸载' }
 } else {
     Say-Warn '没找到 VS Code 的命令行工具，改为直接删扩展目录'
 }
@@ -111,7 +121,8 @@ foreach ($r in @(
     (Join-Path $env:USERPROFILE '.vscode-insiders\extensions')
 )) {
     if (-not (Test-Path $r)) { continue }
-    foreach ($d in @(Get-ChildItem $r -Directory -Filter 'local.codebuddy-helper*' -ErrorAction SilentlyContinue)) {
+    # 通配匹配新旧两个 ID 的目录（local.codebuddy-helper* 与 iloveaimer.codebuddy-helper*）
+    foreach ($d in @(Get-ChildItem $r -Directory -Filter '*codebuddy-helper*' -ErrorAction SilentlyContinue)) {
         Remove-Item $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
         if (-not (Test-Path $d.FullName)) { Say-Ok ('已删除 ' + $d.Name); $n++ }
     }

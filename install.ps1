@@ -2,7 +2,11 @@
 # 用法: 双击 install.bat，或 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 $ErrorActionPreference = 'Stop'
 $src = Split-Path -Parent $MyInvocation.MyCommand.Path
-$extId = 'local.codebuddy-helper'
+# 扩展 ID 必须与 package.json 的 publisher + name 一致，否则装完校验不到（verify.ps1 第 3 节查这一条）
+$extId = 'iloveaimer.codebuddy-helper'
+# 1.2.10 之前的安装用的是 local.codebuddy-helper。两个 ID 并存时会出现两个实例各自轮询日志、
+# 各自弹通知 —— 用起来就是"每条通知弹两遍"，所以装新版前要先把旧 ID 卸掉
+$oldId = 'local.codebuddy-helper'
 $cbId = 'tencent-cloud.coding-copilot'
 
 function Say-Cyan($s) { Write-Host $s -ForegroundColor Cyan }
@@ -94,6 +98,12 @@ if (Test-Path $pkgScript) {
 
 Write-Host ''
 Say-Cyan '[3/4] 安装扩展'
+# 先把旧 ID 卸掉：两个 ID 并存时会有两个实例各自轮询日志、各自弹通知 —— 每条通知弹两遍
+$before = @(& $cli --list-extensions 2>$null)
+if ($before -contains $oldId) {
+    & $cli --uninstall-extension $oldId 2>$null | Out-Null
+    Say-Ok ('已卸载旧 ID 版本：' + $oldId)
+}
 & $cli --install-extension $vsix --force
 if ($LASTEXITCODE -ne 0) { Say-Err '安装失败，见上面的输出'; exit 1 }
 

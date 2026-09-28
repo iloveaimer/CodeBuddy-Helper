@@ -64,6 +64,20 @@ try {
     Good ('版本 ' + $pkg.version)
 } catch { Bad ('解析失败: ' + $_.Exception.Message) }
 
+# install.ps1 / uninstall.ps1 里各硬编码了一份扩展 ID。改了 publisher 忘改它们的话，
+# 装完 `code --list-extensions` 永远校验不到（脚本只会提示"重启后再确认一次"）。
+# 1.2.10 把 publisher 从 local 改成 iloveaimer 时就是这么暴露出来的。
+if ($pkg) {
+    $wantId = [string]$pkg.publisher + '.' + [string]$pkg.name
+    $instText = Get-Content (Join-Path $src 'install.ps1') -Raw -Encoding UTF8
+    $uninText = Get-Content (Join-Path $src 'uninstall.ps1') -Raw -Encoding UTF8
+    if ($instText.Contains($wantId) -and $uninText.Contains($wantId)) {
+        Good ('install/uninstall 里的扩展 ID 与 package.json 一致（' + $wantId + '）')
+    } else {
+        Bad ('install/uninstall 里的扩展 ID 与 package.json 不一致，应为 ' + $wantId + '：装了也校验不到')
+    }
+}
+
 # ---------------------------------------------------------------
 Head '[4/7] 打包并核对 VSIX 内容'
 # hook 脚本漏进包是真实发生过的：扩展只负责轮询和注册，通知全靠 cb-hook.ps1，
