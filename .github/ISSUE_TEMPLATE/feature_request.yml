@@ -1,0 +1,29 @@
+name: 功能建议
+description: 希望它还能做点什么
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 先说问题，再说方案。这样更容易判断该不该做、怎么做。
+      placeholder: 例如：我同时开好几个项目，通知里只看得到项目名，分不清是哪个会话完成的
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你的想法
+      description: 如果有具体做法就写，没有也行
+    validations:
+      required: false
+
+  - type: textarea
+    id: alt
+    attributes:
+      label: 你现在的替代做法
+      description: 目前是怎么绕过去的？这能说明这个问题值不值得做
+    validations:
+      required: false

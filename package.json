@@ -1,0 +1,61 @@
+{
+  "name": "codebuddy-helper",
+  "displayName": "CodeBuddy Helper",
+  "description": "CodeBuddy 任务完成通知 + 自动重试",
+  "version": "1.2.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "keywords": ["codebuddy", "notification", "toast", "windows", "429", "retry"],
+  "repository": { "type": "git", "url": "https://github.com/iloveaimer/CodeBuddy-Helper.git" },
+  "homepage": "https://github.com/iloveaimer/CodeBuddy-Helper#readme",
+  "bugs": { "url": "https://github.com/iloveaimer/CodeBuddy-Helper/issues" },
+  "activationEvents": ["*"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "codebuddyHelper.test", "title": "CodeBuddy Helper: 测试通知" },
+      { "command": "codebuddyHelper.openSoundsDir", "title": "CodeBuddy Helper: 打开通知音效目录" },
+      { "command": "codebuddyHelper.showOutput", "title": "CodeBuddy Helper: 显示运行日志" },
+      { "command": "codebuddyHelper.installHooks", "title": "CodeBuddy Helper: 修复通知配置" },
+      { "command": "codebuddyHelper.removeHooks", "title": "CodeBuddy Helper: 卸载前移除 hook" }
+    ],
+    "configuration": {
+      "title": "CodeBuddy Helper",
+      "properties": {
+        "codebuddyHelper.pollInterval": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "日志扫描间隔（秒）"
+        },
+        "codebuddyHelper.retryCooldown": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 300,
+          "description": "重试冷却时间（秒），两次重试之间至少间隔此时间"
+        },
+        "codebuddyHelper.retryDelay": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "检测到 429 后延迟多少秒自动重试"
+        },
+        "codebuddyHelper.notifyOnComplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "任务完成时弹 Windows 通知"
+        },
+        "codebuddyHelper.notifyOn429": {
+          "type": "boolean",
+          "default": true,
+          "description": "429 限流时弹 Windows 通知并自动重试"
+        }
+      }
+    }
+  }
+}

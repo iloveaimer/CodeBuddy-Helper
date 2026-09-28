@@ -1,0 +1,19 @@
+name: 校验
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查 extension.js 语法
+        shell: pwsh
+        run: node --check extension.js
+
+      - name: 运行发布前自检
+        shell: pwsh
+        run: ./verify.ps1

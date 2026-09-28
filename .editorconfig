@@ -1,0 +1,28 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{js,json,yml,yaml,md}]
+indent_size = 2
+
+# PowerShell 5.1 读没有 BOM 的 .ps1 时按系统 ANSI 码页解码。
+# 中文会变乱码；更糟的是 CJK 标点（【】等）被拆字节后可能吞掉后面的 ASCII 引号，
+# 字符串不闭合，整个脚本直接语法报错。所以 .ps1 必须带 BOM。
+[*.ps1]
+charset = utf-8-bom
+end_of_line = crlf
+
+# cmd 按 OEM 码页读 .bat。BOM 会被当成命令的一部分，中文注释也可能被解析坏。
+# 因此 .bat 只能是 utf-8 无 BOM，且内容必须是纯 ASCII。
+[*.bat]
+charset = utf-8
+end_of_line = crlf
+
+[*.md]
+trim_trailing_whitespace = false

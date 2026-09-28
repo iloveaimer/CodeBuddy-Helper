@@ -1,0 +1,78 @@
+name: 问题反馈
+description: 通知没弹、重试没生效，或者别的不对劲
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交之前，先看一眼 README 里的**故障对照表**，多数情况那里已经有答案。
+
+        也建议先跑一次命令面板的 `CodeBuddy Helper: 显示运行日志`，日志通常直接指明原因。
+
+  - type: input
+    id: winver
+    attributes:
+      label: Windows 版本
+      placeholder: 例如 Windows 11 23H2
+    validations:
+      required: true
+
+  - type: input
+    id: vscode
+    attributes:
+      label: VS Code 版本
+      description: 帮助 → 关于
+      placeholder: 例如 1.85.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: codebuddy
+    attributes:
+      label: CodeBuddy 的状态
+      options:
+        - 装了，且能正常对话
+        - 装了，但没启用
+        - 没装
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 现象
+      description: 越具体越好。"通知不弹"不如"任务跑完了等 5 分钟也没通知，但命令面板的测试通知是好的"
+    validations:
+      required: true
+
+  - type: textarea
+    id: hooklog
+    attributes:
+      label: hook 日志
+      description: |
+        `%TEMP%\cbh-hook.log` 的最后 30 行。
+        里面会有你的项目名，**贴之前请把不想公开的部分删掉**。
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: extlog
+    attributes:
+      label: 扩展日志
+      description: 命令面板 → `CodeBuddy Helper: 显示运行日志`，复制最后 30 行
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: precheck
+    attributes:
+      label: 请确认
+      options:
+        - label: 我**完全退出并重启**过 VS Code（只 Reload Window 不够）
+          required: true
+        - label: 我重开过 CodeBuddy 会话（hook 是会话开始时读取的）
+          required: true
