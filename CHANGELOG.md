@@ -5,6 +5,63 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.9] - 2026-09-28
+
+把本地 3 GB 日志（52 个文件、09-15 至 09-28）里出现过的错误形态全过了一遍：只补一条真漏的，
+并把「明确不该纳入重试」的清单钉在这里 —— 免得以后有人照着 HTTP 错误码表乱加。
+
+### 新增
+
+- **认得尖括号形式的错误码。** 还有一类限流长这样：
+  `<429> InternalError.Algo: An error occurred in model serving, error message is: [Rate limit reached. Please slow down and retry.]`，
+  整行既没有 `HTTP`、也没有 `statusCode` / `errorCode`（实测 13 次），此前两条规则会整条漏掉它。
+  白名单仍只放 429 与三位 5xx：`<400> InternalError.…` 是参数错误或审核拦截，
+  前者重试无用、后者已由 `DataInspectionFailed` 覆盖。
+
+### 说明（都是实测数据，别再照错误码表乱加）
+
+同一批统计里被**排除**的形态，以及排除的理由：
+
+- **`HTTP 412`（56 次）不能加**：日志里出现的是**任务内容文本**（某项目的 B 站风控说明），
+  根本不是 API 错误，加了会误触发。
+- **`HTTP 400`（129 次）不加重试**：里面是 `Invalid max_tokens`、`Model tried to call unavailable tool`、
+  工具参数校验失败这类客户端问题（重试必然同样失败），以及审核拦截（已覆盖）。
+- **`HTTP 403` / `404` / `405` / `501`、业务码 `1040001`（「无访问权限」）**：权限与配置类，重试无用。
+- **`This operation was aborted`（1288 次）不加**：与用户主动停止（`cancelled by abort`，141 次）
+  混在一起分不干净 —— 加了会出现「用户点了停止，任务自己又跑起来」。
+- **`fetch failed`（184 次）不加**：样本全是 MCP 的 `-32601 Method not found`，不是 API 失败。
+- **`timed out`（12010 次）不加**：绝大多数是工具级超时（web-fetch 10 秒超时、权限请求超时）
+  与文档文本，agent 自己会处理。
+- **`Rate limit` 纯文本（299 行）不能泛匹配**：样本里大量是任务内容中的配置注释
+  （`# Rate limiting: max 30 requests per IP per minute`）。
+- `Too Many Requests`（440 行）里虽有一批自身不带数字码，但同一次失败会写
+  `notifyStepError responseBody: {"code":"S0202",…,"message":"后端服务响应状态码异常"}`，
+  已被「后端服务响应状态码异常」那条覆盖 —— **一次失败会写多行，任一行命中就够**。
+
+## [1.2.8] - 2026-09-20
+
+补三个「看得见」的细节：勿扰吞掉横幅时闪任务栏、该看一眼的通知多留 20 秒、状态栏显示等待确认的项目数。
+
+这三条是照同类项目（`vscode-agent-notification`、`AI Agent Notifier`）的做法对着补的 ——
+它们俩都没有自动重试，但这几处通知体验上有可借鉴的地方。
+
+### 新增
+
+- **任务栏闪烁。** 横幅可能被 Windows「专注助手 / 勿扰」直接收进通知中心，那种情况下用户
+  什么都察觉不到 —— 现在每条通知都会顺带闪一下任务栏按钮（闪 3 下，不打断手上的事）。
+  只闪标题里带项目名的那个 VS Code 窗口；一个都没匹配上就全闪，宁可多闪一下也不漏。
+  hook 与扩展两条通知路径都有。
+- **「需要你看一眼」的通知多留 20 秒。** Toast 默认只显示 5 秒，走开一下就没了；
+  待确认 / 任务中断这类改成 `duration="long"`（约 25 秒）。完成通知维持原来的短显示。
+- **状态栏显示等待确认的项目数**（`CBH ⚠2`），tooltip 里列出是哪几个项目，以及最近 5 分钟
+  有几个项目还在写日志。刻意不推断「正在运行」：日志写入本身就滞后，推断出来的状态会显示成
+  「还在跑」其实早停了 —— 只报能确认的事实。
+
+### 说明
+
+- `verify.ps1` 新增一项：任务栏闪烁必须两条通知路径都有 —— 只做 hook 那条的话，
+  「429 重试进度」这类扩展发的通知在勿扰下就完全看不见了。
+
 ## [1.2.7] - 2026-09-20
 
 提示音终于能在插件里改了，不用再去翻目录放文件。
@@ -296,6 +353,8 @@ hook 发的那批通知；扩展自己发的那批**完全没有跳转信息**�
 
 内部里程碑：跑通 VS Code 扩展 + Windows Toast 通知的基本链路。
 
+[1.2.9]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.8...v1.2.9
+[1.2.8]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.7...v1.2.8
 [1.2.7]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.6...v1.2.7
 [1.2.6]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.5...v1.2.6
 [1.2.5]: https://github.com/iloveaimer/CodeBuddy-Helper/compare/v1.2.4...v1.2.5

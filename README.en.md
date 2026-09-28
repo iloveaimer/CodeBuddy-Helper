@@ -32,7 +32,10 @@ has ended, which measures **15 seconds to 7 minutes** behind. So this extension 
 - **"A command is waiting for your confirmation" alerts** — plus one reminder a minute later if the
   first one is missed.
 - **Custom notification sounds** — three roles, seven formats, see below.
-- **Click a notification to jump back to its project**, and task-duration reporting.
+- **Taskbar flash** — when Windows Focus Assist / Do Not Disturb swallows the banner, the taskbar
+  button of the matching window still flashes.
+- **Click a notification to jump back to its project**, task-duration reporting, and a status-bar
+  count of the projects waiting for your confirmation.
 
 ## Requirements
 
@@ -159,7 +162,7 @@ Start with the log: command palette → `CodeBuddy Helper: 显示运行日志`.
 | Notification arrives silently | Unsupported audio format | Switch to `.wav` |
 | Notification is very late (tens of seconds) | It came from CodeBuddy's own log-based notification, not this extension's hook | Check that the `Stop` hook in `settings.json` points to `cb-hook.ps1` |
 | No notification at all while you are looking at VS Code | Before 1.2.5 the "focused window" rule silently dropped it | Upgrade to 1.2.5+; to keep the old "only other windows" behaviour, turn `notifyWhenFocused` off |
-| Still missing even with the setting on | Windows Focus Assist / Do Not Disturb moved the banner into the notification centre | Turn Focus Assist off. This extension's hook fires in the same second the agent ends — there is no plugin-side delay |
+| Still missing even with the setting on | Windows Focus Assist / Do Not Disturb moved the banner into the notification centre | Since 1.2.8 the taskbar button flashes as a fallback; turn Focus Assist off if you want the banner. This extension's hook fires in the same second the agent ends — there is no plugin-side delay |
 | The 「处理过程出现异常，请重试」 dialog appears | A content-moderation block; CodeBuddy retries internally only once and gives up | This extension re-submits the task, up to 10 attempts; the status bar shows 「内容审核拦截 第 N 次」 |
 | The 「服务出现异常，请重试」 dialog appears (e.g. code 500) | Backend response status error; the log line carries no `HTTP` text | This extension reads the status code from adjacent log lines and retries, up to 10 attempts; the status bar shows `HTTP 500 第 N 次` |
 | 「任务中断，未正常完成」 appears | The task ended on a server error; this extension will re-submit it | That is correct — it did not finish; a 「任务执行完成」 notification follows once the retry succeeds |

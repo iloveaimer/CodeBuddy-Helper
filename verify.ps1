@@ -248,6 +248,22 @@ if ($jsText -match 'soundFor' -and $jsText -match 'codebuddyHelper\.pickSound' -
     Bad '提示音的配置没接全：在设置里改了不会生效'
 }
 
+# 横幅可能被 Windows「专注助手 / 勿扰」直接收走，任务栏闪烁是那种情况下唯一还能被察觉的提示。
+# 两条通知路径都要有：只做 hook 那条的话，「429 重试进度」这类扩展发的通知在勿扰下就完全看不见了。
+if ($hookText -match 'Flash-Taskbar' -and $jsText -match 'FlashWindowEx') {
+    Good '任务栏闪烁两条通知路径都有（专注助手拦掉横幅时的兜底）'
+} else {
+    Bad '任务栏闪烁只做了一条通知路径，另一条在勿扰下会完全看不见'
+}
+
+# 还有一类限流把码写在尖括号里（`<429> InternalError.Algo: ... [Rate limit reached]`）：
+# 行里既没有 HTTP 也没有 statusCode，实测 13 次，只认前两条规则会整条漏掉。
+if ($jsText -match 'angleM' -and $jsText.Contains('<429')) {
+    Good 'extension.js 认得尖括号形式的错误码（<429> InternalError…）'
+} else {
+    Bad 'extension.js 漏掉尖括号形式的限流错误（<429> InternalError…）'
+}
+
 # 日志目录是当天所有项目共用的（实测同时有 5 个项目的日志）。不按本窗口项目筛的话：
 # ① A 窗口会把 B 项目的错误重试进 A 的会话；② 每个窗口各弹一次同样的通知。
 if ($jsText -match 'function localProjects' -and $jsText -match 'mine\.includes') {

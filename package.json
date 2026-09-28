@@ -2,7 +2,7 @@
   "name": "codebuddy-helper",
   "displayName": "CodeBuddy Helper",
   "description": "Zero-delay task notifications and automatic retry for CodeBuddy (Windows + VS Code)",
-  "version": "1.2.7",
+  "version": "1.2.9",
   "publisher": "local",
   "author": "Neos",
   "icon": "icon.png",

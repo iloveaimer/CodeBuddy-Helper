@@ -163,15 +163,33 @@ function notify(msg, proj) {
         const xml = msg.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
         const url = proj ? projectUrl(proj) : "";
         const attr = url ? ` activationType="protocol" launch="${url}"` : "";
+        const needAction = NEEDS_ACTION.test(msg);
+        // 需要你看一眼的通知多留 20 秒（默认 5 秒一闪而过）
+        const durAttr = needAction ? ' duration="long"' : "";
         // 有自定义音效时让 Toast 自己静音，改由 cb-sound.ps1 播，否则两声叠在一起
-        const snd = soundFor(NEEDS_ACTION.test(msg) ? "confirm" : "done");
+        const snd = soundFor(needAction ? "confirm" : "done");
         const audio = snd ? '<audio silent="true"/>' : '<audio src="ms-winsoundevent:Notification.Default"/>';
+        const projPat = proj || "";
         fs.writeFileSync(f, "\ufeff" + `[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]|Out-Null
 [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom,ContentType=WindowsRuntime]|Out-Null
 $x=New-Object Windows.Data.Xml.Dom.XmlDocument
-$x.LoadXml('<toast${attr}><visual><binding template="ToastGeneric"><text>${xml}</text></binding></visual>${audio}</toast>')
+$x.LoadXml('<toast${attr}${durAttr}><visual><binding template="ToastGeneric"><text>${xml}</text></binding></visual>${audio}</toast>')
 $n=[Windows.UI.Notifications.ToastNotification]::new($x)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${AUMID}').Show($n)
+# 横幅可能被专注助手直接收走：闪一下任务栏兜底。标题里带项目名的那个窗口优先，匹配不上就全闪
+Add-Type -Namespace CBH -Name Win -MemberDefinition '[StructLayout(LayoutKind.Sequential)] public struct FLASHWINFO { public uint cbSize; public IntPtr hwnd; public uint dwFlags; public uint uCount; public uint dwTimeout; } [DllImport("user32.dll")] public static extern bool FlashWindowEx(ref FLASHWINFO pwfi);'
+$wins=@(Get-Process -Name Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+$hit=@($wins | Where-Object { $_.MainWindowTitle -like '*${projPat}*' })
+if ($hit.Count -gt 0) { $wins=$hit }
+foreach ($p in $wins) {
+  $fi=New-Object CBH.Win+FLASHWINFO
+  $fi.cbSize=[System.Runtime.InteropServices.Marshal]::SizeOf($fi)
+  $fi.hwnd=$p.MainWindowHandle
+  $fi.dwFlags=3
+  $fi.uCount=3
+  $fi.dwTimeout=0
+  [void][CBH.Win]::FlashWindowEx([ref]$fi)
+}
 `, "utf-8");
         cp.exec(`powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File "${f}"`, () => {
             setTimeout(() => { try { fs.unlinkSync(f); } catch (_) {} }, 5000);
@@ -408,11 +426,16 @@ function trackApiError(p, c) {
         //      这本来就是服务端故障，宁可多试，也不能让任务干等。只认 HTTP 的话它一次都不会重试。
         const httpM = line.match(/HTTP (429|500|502|503|504|401)/);
         const codeM = httpM ? null : line.match(/\b(?:statusCode|errorCode|code)["']?\s*[:=]\s*"?(429|5\d\d)\b/);
+        // 还有一种写法把码放在尖括号里：`<429> InternalError.Algo: An error occurred in model serving,
+        // error message is: [Rate limit reached. Please slow down and retry.]` —— 行里既没有 HTTP、
+        // 也没有 statusCode/errorCode，实测 13 次，只认前两条会整条漏掉。尖括号里的 400 不在此列：
+        // 那类是参数错误或审核拦截，前者重试无用、后者已由 DataInspectionFailed 单独覆盖。
+        const angleM = (httpM || codeM) ? null : line.match(/<(429|5\d\d)>\s*InternalError\./);
         const bizFail = /后端服务响应状态码异常/.test(line);
-        if (!httpM && !codeM && !bizFail && !/InternalError\.Algo\.DataInspectionFailed/.test(line)) continue;
+        if (!httpM && !codeM && !angleM && !bizFail && !/InternalError\.Algo\.DataInspectionFailed/.test(line)) continue;
 
         const block = line + "\n" + lines.slice(i, i + 5).join("\n");
-        const codeHit = httpM || codeM || block.match(/\b(?:statusCode|errorCode|code)["']?\s*[:=]\s*"?(429|5\d\d)\b/);
+        const codeHit = httpM || codeM || angleM || block.match(/\b(?:statusCode|errorCode|code)["']?\s*[:=]\s*"?(429|5\d\d)\b/);
         const code = codeHit ? codeHit[1] : (bizFail ? "srv" : "inspect");
         // 真实日志格式: X-Conversation-ID: 33c46762bc3b4cbd88cbe73166577849
         // \W{0,8} 兼容带引号/多空格/换行的变体（实测 55/55 命中）
@@ -572,9 +595,17 @@ function activate(ctx) {
     ctx.subscriptions.push(vscode.window.onDidChangeWindowState(() => writeFocus()));
     ctx.subscriptions.push(new vscode.Disposable(() => { try { fs.unlinkSync(FOCUS_FILE); } catch (_) {} }));
 
-    // 状态栏刷新：展示重试进度 / 最近一次重试结果
+    // 状态栏刷新：重试进度 / 最近一次重试结果 / 有几个项目在等你确认
     const updateStatusBar = () => {
-        const retrying = Object.entries(E).find(([, s]) => s && s.count > 0 && Date.now() < (s.next || 0));
+        const now = Date.now();
+        const retrying = Object.entries(E).find(([, s]) => s && s.count > 0 && now < (s.next || 0));
+        // 唯一能可靠判断的"需要你动手"状态就是待确认（来自日志里的危险命令检测）。
+        // "正在跑"不在这里断言：日志写入本身滞后，推断出来的状态会显示成"还在跑"其实早停了。
+        const waiting = Object.keys(W).filter((k) => W[k]);
+        // 所以运行侧只报事实：最近 5 分钟内还有日志写入的项目数
+        const active = Object.keys(S).filter((fp) => {
+            try { return now - fs.statSync(fp).mtimeMs < 300000; } catch (_) { return false; }
+        });
         let text, tip;
         if (retrying || queue.length) {
             const k = retrying ? retrying[0] : (queue[0] ? queue[0].p : "?");
@@ -582,14 +613,18 @@ function activate(ctx) {
             text = `$(sync~spin) CBH 重试 ${s.count}/${MAX}`;
             tip = `${k}\n${errLabel(s.code)} · 第 ${s.count} 次\n队列 ${queue.length} 项`;
         } else if (lastRetry) {
-            const sec = Math.round((Date.now() - lastRetry.ts) / 1000);
+            const sec = Math.round((now - lastRetry.ts) / 1000);
             const ago = sec < 60 ? `${sec} 秒前` : `${Math.round(sec / 60)} 分钟前`;
             text = `$(bell) CBH ${lastRetry.ok ? "$(check)" : "$(warning)"}`;
             tip = `最近重试: ${lastRetry.proj} (${errLabel(lastRetry.code)})\n${lastRetry.ok ? "成功" : "失败"} · ${ago}`;
         } else {
-            text = "$(bell) CBH";
+            text = waiting.length ? `$(bell) CBH ⚠${waiting.length}` : "$(bell) CBH";
             tip = "CodeBuddy Helper\n完成通知由 CodeBuddy hook 负责\n点击查看运行日志";
         }
+        const extra = [];
+        if (waiting.length) extra.push(`待你确认: ${waiting.join("、")}`);
+        if (active.length) extra.push(`最近 5 分钟有日志活动: ${active.length} 个项目`);
+        if (extra.length) tip = tip + "\n" + extra.join("\n");
         if (sb.text !== text) sb.text = text;
         if (sb.tooltip !== tip) sb.tooltip = tip;
     };

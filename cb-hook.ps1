@@ -224,6 +224,35 @@ function Get-SoundFile($kind) {
 
 # （音效播放已内联在 Send-Toast 中：直接调 cb-sound.ps1，省一次目录扫描）
 
+# ---------- 任务栏闪烁 ----------
+# 横幅可能被 Windows「专注助手 / 勿扰」直接收进通知中心，那种情况下用户什么都看不到，
+# 任务栏按钮闪几下是唯一还能被察觉的提示。前台时本来就不弹通知，所以这里不必判断前台。
+# 只闪标题里带项目名的那个窗口（VS Code 窗口标题固定含工作区名）；一个都没匹配上就全闪 ——
+# 宁可多闪一下，也不能漏。
+function Flash-Taskbar($projName) {
+    try {
+        if (-not ('CBH.Win' -as [type])) {
+            Add-Type -Namespace CBH -Name Win -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)] public struct FLASHWINFO { public uint cbSize; public IntPtr hwnd; public uint dwFlags; public uint uCount; public uint dwTimeout; }
+[DllImport("user32.dll")] public static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+'@
+        }
+        $wins = @(Get-Process -Name Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+        if ($wins.Count -eq 0) { return }
+        $hit = @($wins | Where-Object { $projName -and $_.MainWindowTitle -like ('*' + $projName + '*') })
+        $targets = if ($hit.Count -gt 0) { $hit } else { $wins }
+        foreach ($p in $targets) {
+            $fi = New-Object CBH.Win+FLASHWINFO
+            $fi.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($fi)
+            $fi.hwnd = $p.MainWindowHandle
+            $fi.dwFlags = 3      # FLASHW_ALL：标题栏与任务栏按钮一起闪
+            $fi.uCount = 3       # 闪 3 下就够，不打断正在做的事
+            $fi.dwTimeout = 0
+            [void][CBH.Win]::FlashWindowEx([ref]$fi)
+        }
+    } catch {}
+}
+
 function Send-Toast($text, $title, $launch, $kind) {
     try {
         [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
@@ -249,8 +278,12 @@ function Send-Toast($text, $title, $launch, $kind) {
             Write-Log "  sound: Windows 系统默认通知音"
         }
 
+        # "需要你看一眼"的通知多留 20 秒：默认只显示 5 秒，走开一下就没了
+        $durAttr = ''
+        if ($kind -eq 'confirm') { $durAttr = ' duration="long"' }
+
         $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-        $xml.LoadXml('<toast' + $attr + '><visual><binding template="ToastGeneric"><text>' + $safeH + '</text><text>' + $safeT + '</text></binding></visual>' + $audioTag + '</toast>')
+        $xml.LoadXml('<toast' + $attr + $durAttr + '><visual><binding template="ToastGeneric"><text>' + $safeH + '</text><text>' + $safeT + '</text></binding></visual>' + $audioTag + '</toast>')
         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($aumid).Show($toast)
 
@@ -259,6 +292,9 @@ function Send-Toast($text, $title, $launch, $kind) {
             Start-Process -WindowStyle Hidden -FilePath 'powershell' `
                 -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $soundPlayer, $customFile) | Out-Null
         }
+
+        # 横幅可能被专注助手直接收走，闪一下任务栏兜底。标题形如「【项目名】」，去掉括号取项目名
+        Flash-Taskbar ($title -replace '[【】]', '')
     } catch {
         Write-Log ('  toast error: ' + $_.Exception.Message)
     }
